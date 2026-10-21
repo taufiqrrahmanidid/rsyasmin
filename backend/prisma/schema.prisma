@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model AdminUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         String   @default("User") // "Master", "SuperUser", "User"
+  
+  // Array Hak Akses Spesifik (Contoh: ["MENU_DOKTER", "MENU_PENDAFTARAN", "ACTION_DELETE_ARTICLE"])
+  permissions  Json?    @default("[]") 
+  
+  // Siapa yang membuat akun ini (Tracking)
+  createdBy    String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+}
+
+model AdminDeviceLicense {
+  id          String   @id @default(uuid())
+  deviceHash  String   @unique
+  deviceName  String
+  adminEmail  String   // Email admin yang mencoba login di device ini
+  isAllowed   Boolean  @default(false) // Default false, harus di-approve SuperUser/Master
+  approvedBy  String?  // Siapa SuperUser yang meng-approve device ini
+  createdAt   DateTime @default(now())
+  lastActive  DateTime @updatedAt
+}
+
+model RegistrationInvite {
+  id          String   @id @default(uuid())
+  token       String   @unique // Unix ID unik (e.g. ysm-reg-1726653920-x9a)
+  patientName String
+  phone       String
+  passcode    String   // Password login sementara pasien
+  expiresAt   DateTime // Default 3 jam atau ditentukan admin
+  isUsed      Boolean  @default(false)
+  adminEmail  String
+  createdAt   DateTime @default(now())
+}
+
+model Pendaftaran {
+  id                     String   @id // No. Tiket
+  source                 String   @default("link_webapp")
+  status                 String   @default("baru") // baru, diverifikasi, dijadwalkan, selesai, dibatalkan
+  
+  // Data Pasien
+  patientName            String
+  phone                  String
+  patientType            String   @default("Umum") // Umum, BPJS, Asuransi, Perusahaan
+  patientStatus          String   @default("Baru") // Baru, Lama
+  noIdentitas            String?  // NIK / No. Anggota / No. Rekam Medis (RM)
+  
+  // Kunjungan & Poli
+  selectedPoli           String?  @default("Poli Spesialis / Umum")
+  selectedDoctorId       String   @default("LDP")
+  selectedDoctorName     String?  @default("dr. Luty Diah Prahmani, Sp.A")
+  selectedDate           String
+  selectedTimeSlot       String
+  
+  // Pembayaran & Verifikasi
+  metodePembayaran       String   @default("transfer") // transfer, bayar_di_loket
+  bankTujuan             String?  // Mandiri, BCA, BNI, Jatim, BRI
+  nominalBiaya           Int      @default(0)
+  buktiTransferImage     String?  @db.Text
+  buktiTransferDikirim   Boolean  @default(false)
+  
+  // Integrasi SIMRS (Next Plan)
+  kodeBooking            String?  // Kode Booking e.g. 47XUGE
+  antrian                String?  // No Antrean e.g. ANK-030
+  
+  adminNotes             String?  @db.Text
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model HospitalInfo {
+  id            String   @id @default("hospital_info")
+  name          String
+  address       String
+  phone         String
+  email         String
+  whatsapp      String
+  accreditation String
+  logo          String?  @db.Text
+  youtubeChannelId String?
+  updatedAt     DateTime @updatedAt
+}
+
+model Polyclinic {
+  code              String   @id
+  name              String
+  status            String
+  activeSinceDate   String?
+  inactiveSinceDate String?
+}
+
+model Specialist {
+  code        String @id
+  name        String
+  description String @db.Text
+}
+
+model Doctor {
+  id                String  @id
+  name              String
+  specialty         String
+  subSpecialty      String?
+  gender            String?
+  speciali          String?
+  experience        Int     @default(0)
+  rating            Float   @default(5.0)
+  bpjs              Boolean @default(true)
+  education         String?
+  bio               String? @db.Text
+  image             String? @db.Text
+  status            String  @default("Aktif")
+  gradGradDate      String?
+  licenseNumber     String?
+  specGradDate      String?
+  specLicenseNumber String?
+  joinDate          String?
+  leaveFromDate     String?
+  leaveToDate       String?
+  schedule          Json?
+}
+
+model Room {
+  id         String @id
+  type       String
+  name       String
+  class      String
+  capacity   Int    @default(0)
+  occupied   Int    @default(0)
+  facilities String @db.Text
+}
+
+model SocialMedia {
+  id       String @id
+  platform String
+  url      String
+  icon     String
+}
+
+model SocialFeed {
+  id        String   @id @default(uuid())
+  platform  String   // Youtube, Instagram, Tiktok, Facebook
+  title     String
+  desc      String?  @db.Text
+  url       String   // URL Postingan Asli
+  embedUrl  String?  // Otomatis diisi oleh sistem untuk YouTube
+  thumbnail String?  @db.Text
+  tag       String   @default("Edukasi")
+  dateStr   String
+  createdAt DateTime @default(now())
+}
+
+model Announcement {
+  id         String  @id
+  title      String
+  image      String? @db.Text
+  isActive   Boolean @default(true)
+  activeDate String?
+  closeDate  String?
+}
+
+model GoogleReview {
+  id           String   @id
+  authorName   String
+  authorPhoto  String?  @db.Text
+  rating       Int
+  dateStr      String
+  relativeTime String
+  comment      String   @db.Text
+  isVisible    Boolean  @default(true)
+  source       String   @default("google_maps")
+  syncedAt     DateTime @default(now())
+}
+
+model Article {
+  id          String   @id @default(uuid())
+  title       String
+  slug        String   @unique // URL ramah SEO, misal: cara-mencegah-diabetes
+  content     String   @db.Text // Isi artikel (mendukung format HTML/Rich Text)
+  coverImage  String?  @db.Text
+  category    String   @default("Kesehatan")
+  author      String   @default("Tim Medis RS Yasmin")
+  tags        String?  // Pisahkan dengan koma: "jantung, diet, lansia"
+  views       Int      @default(0)
+  isPublished Boolean  @default(true) // Draft atau Publish
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model QueueLog {
+  id              String   @id @default(uuid())
+  pendaftaranId   String   // FK to Pendaftaran.id
+  polyclinic      String   // Nama poli
+  queueNumber     String   // ANK-030
+  status          String   @default("waiting") // waiting, called, serving, completed, skipped
+  calledAt        DateTime?
+  completedAt     DateTime?
+  calledBy        String?  // AdminUser email
+  loketNumber     String?  // Loket 1, 2, 3
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
