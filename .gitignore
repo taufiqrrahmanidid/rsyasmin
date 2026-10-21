@@ -56,3 +56,7 @@ backend/prisma/generated/
 # Lock files (optional - uncomment if you want to track)
 # package-lock.json
 # yarn.lock
+
+audit_backend.json
+audit_frontend.json
+server_routes.txt
