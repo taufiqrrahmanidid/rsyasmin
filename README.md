@@ -68,7 +68,6 @@ nginx:80
 2. Enable HTTPS di nginx.conf
 3. Setup MySQL backups
 4. Configure PM2 clustering
-5. Setup monitoring (Prometheus, Grafana)
 
 ## Troubleshooting
 
