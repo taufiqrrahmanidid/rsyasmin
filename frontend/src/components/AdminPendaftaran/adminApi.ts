@@ -2,13 +2,23 @@ import type { Pendaftaran, PendaftaranStatus } from './types';
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api';
 
+// Auth via httpOnly cookie (credentials: 'include') — TIDAK ada token di localStorage.
+
 // Ambil daftar antrean dari PostgreSQL
 export async function fetchPendaftaranList(filter?: {
   status?: PendaftaranStatus | '';
   source?: string;
 }): Promise<Pendaftaran[]> {
-  const res = await fetch(`${API_BASE}/pendaftaran`);
-  if (!res.ok) throw new Error('Gagal mengambil data dari server lokal.');
+  const res = await fetch(`${API_BASE}/pendaftaran`, {
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      throw new Error('Sesi berakhir (401). Silakan login kembali.');
+    }
+    throw new Error('Gagal mengambil data dari server lokal.');
+  }
   const data: Pendaftaran[] = await res.json();
 
   return data.filter(item => {
@@ -23,6 +33,7 @@ export async function fetchPendaftaranList(filter?: {
 export async function updateStatus(id: string, status: PendaftaranStatus, notes?: string): Promise<void> {
   const res = await fetch(`${API_BASE}/pendaftaran/${id}/status`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status, notes }),
   });
@@ -33,6 +44,7 @@ export async function updateStatus(id: string, status: PendaftaranStatus, notes?
 export async function sendManualMessage(id: string, message: string): Promise<void> {
   const res = await fetch(`${API_BASE}/pendaftaran/${id}/notify`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
   });

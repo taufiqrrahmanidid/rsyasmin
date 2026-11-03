@@ -48,7 +48,7 @@ export default function GallerySection() {
   useEffect(() => {
     const fetchFeeds = async () => {
       try {
-        const API_BASE = import.meta.env.VITE_API_URL || 'https://api.yasminhospital.dinamixnet.id';
+        const API_BASE = import.meta.env.VITE_API_URL || '';
         const res = await fetch(`${API_BASE}/api/social-feed`);
         const result = await res.json();
         

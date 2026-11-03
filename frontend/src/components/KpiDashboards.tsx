@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -31,7 +31,8 @@ import {
   Shuffle,
   Eye,
   ActivitySquare,
-  Calendar
+  Calendar,
+  X
 } from 'lucide-react';
 
 interface KpiConfig {
@@ -52,15 +53,146 @@ interface KpiConfig {
   chartYLabel: string;
   tableHeaders: string[];
   tableRows: Array<Array<string | number>>;
-  recommendations: string[];
+  recommendations?: string[]; 
 }
 
 export default function KpiDashboard({ menu }: { menu: string }) {
   const [timeframe, setTimeframe] = useState<'Daily' | 'Weekly' | 'Monthly'>('Monthly');
-  const [selectedDailyOption, setSelectedDailyOption] = useState<string>('hari-ini');
-  const [selectedWeeklyOption, setSelectedWeeklyOption] = useState<string>('minggu-ini');
-  const [selectedMonthlyOption, setSelectedMonthlyOption] = useState<string>('juli-2026');
+  const [selectedDailyOption, setSelectedDailyOption] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedWeeklyOption, setSelectedWeeklyOption] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - d.getDay() + 1); // Set ke hari Senin minggu ini
+    return d.toISOString().split('T')[0];
+  });
+  const [selectedMonthlyOption, setSelectedMonthlyOption] = useState<string>(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]; // Tgl 1 bulan ini
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // State untuk Data Dinamis
+  const [dynamicKpi, setDynamicKpi] = useState<KpiConfig | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [manualData, setManualData] = useState<any[]>([]);
+
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Fetch Data dari Backend
+  useEffect(() => {
+    const fetchKpiData = async () => {
+      const supportedMenus = [
+        'KPI_RAWAT_JALAN', 'KPI_BED_MANAGEMENT', 'KPI_ANTRIAN',
+        'KPI_IGD', 'KPI_ICU', 'KPI_HCU', 'KPI_NICU', 'KPI_PICU',
+        'KPI_RAWAT_INAP', 'KPI_PERINATOLOGI', 'KPI_KAMAR_OPERASI', 'KPI_CSSD',
+        'KPI_HEMODIALISA', 'KPI_MCU', 'KPI_REHABILITASI_MEDIK', 'KPI_HOME_CARE',
+        'KPI_AMBULANCE', 'KPI_RUJUKAN_PASIEN', 'KPI_ANALISA_RUJUKAN', 'KPI_KINERJA_PELAYANAN'
+      ];
+      if (!supportedMenus.includes(menu)) {
+        setDynamicKpi(null); 
+        return;
+      }
+
+      setIsLoadingData(true);
+      try {
+        const activeDate = timeframe === 'Daily' ? selectedDailyOption : timeframe === 'Weekly' ? selectedWeeklyOption : selectedMonthlyOption;
+
+        const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/kpi/${menu}?timeframe=${timeframe}&dateStr=${activeDate}`, {
+          credentials: 'include'
+        });
+        
+        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+        
+        const data = await res.json();
+        console.log('[KPI API SUCCESS] Data dari backend:', data); 
+        
+        const baseConfig = kpis[menu];
+        setDynamicKpi({
+          ...baseConfig,
+          metrics: data.metrics,
+          chartData: data.chartData,
+          tableRows: data.tableRows,
+          recommendations: data.recommendations || baseConfig.recommendations 
+        });
+      } catch (err) {
+        console.error('[KPI API ERROR] Gagal memuat data:', err);
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+
+    fetchKpiData();
+  }, [menu, timeframe, selectedDailyOption, selectedWeeklyOption, selectedMonthlyOption, refreshTrigger]);
+
+  const handleOpenManualInput = () => {
+    let fields = [
+      { key: 'total_pasien', label: 'Total Pasien / Kunjungan', value: '' },
+      { key: 'keterangan_1', label: 'Metrik Tambahan (Opsional)', value: '' },
+    ];
+
+    // Kustomisasi form berdasarkan menu yang sedang dibuka
+    if (menu === 'KPI_IGD') {
+      fields = [
+        { key: 'total_pasien', label: 'Total Pasien IGD', value: '' },
+        { key: 'response_time', label: 'Rata-rata Response Time (Menit)', value: '' },
+        { key: 'death_on_arrival', label: 'Jumlah Pasien DOA', value: '' },
+      ];
+    } else if (menu === 'KPI_MCU') {
+      fields = [
+        { key: 'total_peserta', label: 'Total Peserta MCU', value: '' },
+        { key: 'kecepatan_hasil', label: 'Rata-rata Kecepatan Hasil (Jam)', value: '' },
+        { key: 'omset', label: 'Omset MCU (Rp)', value: '' },
+      ];
+    } else if (menu === 'KPI_KAMAR_OPERASI') {
+      fields = [
+        { key: 'total_operasi', label: 'Total Tindakan Bedah', value: '' },
+        { key: 'penundaan', label: 'Jumlah Penundaan Operasi', value: '' },
+        { key: 'infeksi', label: 'Infeksi Luka Operasi (%)', value: '' },
+      ];
+    } else if (menu === 'KPI_KINERJA_PELAYANAN') {
+      fields = [
+        { key: 'kepatuhan_sasaran', label: 'Kepatuhan Sasaran Keselamatan (%)', value: '' },
+        { key: 'kepuasan_pasien', label: 'Indeks Kepuasan Pasien (1-5)', value: '' },
+      ];
+    }
+
+    setManualData(fields);
+    setIsManualModalOpen(true);
+  };
+
+  const handleSaveManual = async () => {
+    try {
+      const activeDate = timeframe === 'Daily' ? selectedDailyOption : timeframe === 'Monthly' ? selectedMonthlyOption : selectedWeeklyOption;
+      
+      // 👇 Saring hanya field yang ada isinya 👇
+      const filledMetrics = manualData.filter(m => m.value && m.value.trim() !== '');
+
+      if (filledMetrics.length === 0) {
+        alert('Silakan isi minimal satu data.');
+        return;
+      }
+
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/kpi/manual`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kpiCode: menu,
+          dateStr: activeDate,
+          metrics: filledMetrics // Kirim yang terisi saja
+        })
+      });
+
+      if (res.ok) {
+        alert('Data manual berhasil disimpan!');
+        setIsManualModalOpen(false);
+        setRefreshTrigger(prev => prev + 1); // 👈 Trigger fetch data dari API!
+      }
+    } catch (err) {
+      alert('Gagal menyimpan data manual.');
+    }
+  };
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -137,6 +269,32 @@ export default function KpiDashboard({ menu }: { menu: string }) {
         'Lakukan penambahan dokter cadangan pada jam puncak (peak hour) pukul 09:00 - 11:00.',
         'Integrasikan notifikasi Whatsapp antrean otomatis untuk mengurangi kepadatan ruang tunggu poliklinik gigi.'
       ]
+    },
+    KPI_BED_MANAGEMENT: {
+      id: 'KPI_BED_MANAGEMENT',
+      title: 'Bed Management (BOR)',
+      category: 'Efisiensi Operasional',
+      description: 'Pemantauan alokasi tempat tidur rumah sakit secara terpusat, koordinasi ketersediaan bed, dan efisiensi waktu pembersihan bed.',
+      metrics: [], // Akan diisi oleh API
+      chartType: 'bar',
+      chartYLabel: 'Jumlah Bed',
+      chartData: [], // Akan diisi oleh API
+      tableHeaders: ['Bangsal Rawat', 'Kelas', 'Kapasitas', 'Terisi', 'Kosong', 'BOR (%)'],
+      tableRows: [], // Akan diisi oleh API
+      recommendations: []
+    },
+    KPI_ANTRIAN: {
+      id: 'KPI_ANTRIAN',
+      title: 'Manajemen Antrian',
+      category: 'Efisiensi Operasional',
+      description: 'Pemantauan alur pendaftaran antrean mandiri, waktu tunggu peresepan apotek, dan tingkat kepuasan loket pendaftaran.',
+      metrics: [], // Akan diisi oleh API
+      chartType: 'line',
+      chartYLabel: 'Jumlah Antrean',
+      chartData: [], // Akan diisi oleh API
+      tableHeaders: ['Poliklinik', 'Total Antrean', 'Menunggu', 'Selesai', 'Status Indikator'],
+      tableRows: [], // Akan diisi oleh API
+      recommendations: []
     },
     KPI_RAWAT_INAP: {
       id: 'KPI_RAWAT_INAP',
@@ -617,68 +775,6 @@ export default function KpiDashboard({ menu }: { menu: string }) {
         'Sertakan pelatihan Defensive Driving bagi semua pengemudi ambulans RS Yasmin secara berkala.'
       ]
     },
-    KPI_BED_MANAGEMENT: {
-      id: 'KPI_BED_MANAGEMENT',
-      title: 'Bed Management',
-      category: 'Efisiensi Operasional',
-      description: 'Pemantauan alokasi tempat tidur rumah sakit secara terpusat, koordinasi ketersediaan bed, dan efisiensi waktu pembersihan bed.',
-      metrics: [
-        { label: 'Tempat Tidur Total', value: '180 Bed', change: 'Stabil', trend: 'neutral', sub: 'Kapasitas RS', color: 'bg-teal-50 text-teal-700 border-teal-100' },
-        { label: 'Bed Terisi (Avg)', value: '141 Bed', change: '+3.5 Bed', trend: 'up', sub: 'Tingkat BOR 78.4%', color: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
-        { label: 'Pembersihan Bed (Avg)', value: '24.2 Menit', change: '-4.8 Menit', trend: 'up', sub: 'Target < 30.0 menit', color: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
-        { label: 'Antrean Bed IGD', value: '0.8 Pasien', change: '-0.3 Pasien', trend: 'up', sub: 'Target < 2 Pasien/hari', color: 'bg-rose-50 text-rose-700 border-rose-100' }
-      ],
-      chartType: 'line',
-      chartYLabel: 'Jumlah Bed Kosong',
-      chartData: [
-        { label: 'Senin', value: 42, target: 35 },
-        { label: 'Rabu', value: 36, target: 35 },
-        { label: 'Jumat', value: 28, target: 35 },
-        { label: 'Minggu', value: 48, target: 35 }
-      ],
-      tableHeaders: ['Bangsal Rawat', 'Kapasitas', 'Bed Terisi', 'Bed Kosong', 'Sedang Dibersihkan', 'Rerata Turnaround'],
-      tableRows: [
-        ['Semeru (Suite/VIP)', '20', '17', '2', '1', '18 Menit'],
-        ['Ijen (Kelas 1)', '30', '24', '5', '1', '22 Menit'],
-        ['Raung (Kelas 2)', '40', '31', '7', '2', '24 Menit'],
-        ['Baluran (Kelas 3)', '60', '52', '6', '2', '28 Menit'],
-        ['Isolasi Khusus', '10', '5', '5', '0', '15 Menit']
-      ],
-      recommendations: [
-        'Lakukan audit kepatuhan pembersihan bed pasca pasien pulang untuk menjaga waktu tunggu pasien IGD yang akan masuk rawat inap.',
-        'Gunakan status barcode visual pada pintu ruangan agar tim kebersihan (cleaning service) merespon otomatis.'
-      ]
-    },
-    KPI_ANTRIAN: {
-      id: 'KPI_ANTRIAN',
-      title: 'Antrian (Manajemen Sistem Antrean)',
-      category: 'Efisiensi Operasional',
-      description: 'Pemantauan alur pendaftaran antrean mandiri, waktu tunggu peresepan apotek, dan tingkat kepuasan loket pendaftaran.',
-      metrics: [
-        { label: 'Waktu Tunggu Loket', value: '6.4 Menit', change: '-2.1 Menit', trend: 'up', sub: 'Target < 10.0 Menit', color: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
-        { label: 'Pendaftaran Online', value: '64.2%', change: '+8.4%', trend: 'up', sub: 'Mobile App & Whatsapp', color: 'bg-teal-50 text-teal-700 border-teal-100' },
-        { label: 'Waktu Apotek Jadi', value: '18.2 Menit', change: '-4.1 Menit', trend: 'up', sub: 'Target Obat Jadi <20 Menit', color: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
-        { label: 'Komplain Antrean', value: '0.4%', change: '-0.2%', trend: 'up', sub: 'Target < 1.0%', color: 'bg-rose-50 text-rose-700 border-rose-100' }
-      ],
-      chartType: 'bar',
-      chartYLabel: 'Rata-rata Waktu Tunggu (Menit)',
-      chartData: [
-        { label: 'Loket Pendaftaran', value: 6, target: 10 },
-        { label: 'Pemeriksaan Dokter', value: 24, target: 30 },
-        { label: 'Kasir & Pembayaran', value: 4, target: 8 },
-        { label: 'Apotek (Obat Racikan)', value: 28, target: 35 }
-      ],
-      tableHeaders: ['Saluran Pendaftaran', 'Total Pasien', 'Waktu Proses Rerata', 'Kontribusi Antrean', 'Kepuasan (%)'],
-      tableRows: [
-        ['Sistem Antrean Mandiri Online', '9,150 Pasien', '1.8 Menit', '64.2%', '98.4%'],
-        ['Sistem Mesin Kios Mandiri (On-site)', '3,120 Pasien', '3.1 Menit', '21.9%', '96.2%'],
-        ['Loket Manual (Walk-in)', '1,980 Pasien', '8.4 Menit', '13.9%', '88.5%']
-      ],
-      recommendations: [
-        'Kampanyekan pendaftaran online lewat Whatsapp interaktif kepada pasien usia lanjut yang didampingi keluarga.',
-        'Atur penambahan juru racik obat (pharmacist) tambahan pada jam sibuk pengambilan obat pukul 11:30 - 13:30.'
-      ]
-    },
     KPI_RUJUKAN_PASIEN: {
       id: 'KPI_RUJUKAN_PASIEN',
       title: 'Rujukan Pasien',
@@ -1041,7 +1137,7 @@ export default function KpiDashboard({ menu }: { menu: string }) {
     return kpi;
   };
 
-  const activeKpi = getKpiData(
+  const activeKpi = dynamicKpi || getKpiData(
     menu, 
     timeframe, 
     selectedDailyOption, 
@@ -1052,6 +1148,15 @@ export default function KpiDashboard({ menu }: { menu: string }) {
   // Chart rendering helpers (Hand-crafted beautiful SVGs for React 19 safety)
   const renderChart = () => {
     const data = activeKpi.chartData;
+    if (!data || data.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 sm:h-56 text-gray-400">
+          <ActivitySquare className="h-10 w-10 mb-2 opacity-50" />
+          <p className="text-sm font-bold">Belum ada data tren untuk periode ini.</p>
+          <p className="text-xs mt-1">Data grafik akan muncul jika ada input harian yang tercatat.</p>
+        </div>
+      );
+    }
     const maxVal = Math.max(...data.map(d => Math.max(d.value, d.target))) * 1.15;
     const height = 180;
     const width = 500;
@@ -1096,7 +1201,15 @@ export default function KpiDashboard({ menu }: { menu: string }) {
           {/* Data Nodes */}
           {data.map((d, i) => (
             <g key={i} className="group cursor-pointer">
-              <circle cx={getX(i)} cy={getY(d.value)} r="5" className="fill-[#0B4F4A] stroke-white stroke-2 shadow-xs transition-all hover:scale-125" />
+              <circle 
+                cx={getX(i)} 
+                cy={getY(d.value)} 
+                r="5" 
+                className="fill-[#0B4F4A] stroke-white stroke-2 transition-all duration-200" 
+                style={{ transformOrigin: 'center', transformBox: 'fill-box' }} // 👈 TAMBAHKAN INI
+                onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.5)'}
+                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              />
               <text x={getX(i)} y={getY(d.value) - 10} className="text-[10px] font-black fill-[#0B4F4A] font-mono text-center" textAnchor="middle">{d.value}</text>
               <text x={getX(i)} y={height - padding + 16} className="text-[9px] font-bold fill-gray-500" textAnchor="middle">{d.label}</text>
             </g>
@@ -1200,6 +1313,40 @@ export default function KpiDashboard({ menu }: { menu: string }) {
     }
   };
 
+  // Fungsi untuk generate tanggal dinamis
+  const getDateOptions = (type: 'Daily' | 'Weekly' | 'Monthly') => {
+    const options = [];
+    const today = new Date();
+    
+    if (type === 'Daily') {
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - i);
+        const isoDate = d.toISOString().split('T')[0];
+        const label = d.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' });
+        options.push({ value: isoDate, label: i === 0 ? `${label} (Hari Ini)` : i === 1 ? `${label} (Kemarin)` : label });
+      }
+    } else if (type === 'Weekly') {
+      for (let i = 0; i < 4; i++) {
+        const start = new Date(today);
+        start.setDate(today.getDate() - (i * 7) - today.getDay() + 1); // Senin
+        const isoDate = start.toISOString().split('T')[0];
+        const end = new Date(start);
+        end.setDate(start.getDate() + 6);
+        const label = `${start.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} - ${end.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+        options.push({ value: isoDate, label: i === 0 ? `Pekan Ini (${label})` : i === 1 ? `Pekan Lalu (${label})` : label });
+      }
+    } else {
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+        const isoDate = d.toISOString().split('T')[0];
+        const label = d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        options.push({ value: isoDate, label });
+      }
+    }
+    return options;
+  };
+
   return (
     <div className="space-y-6 animate-fade-in-down font-sans pb-12">
       
@@ -1245,57 +1392,36 @@ export default function KpiDashboard({ menu }: { menu: string }) {
             {timeframe === 'Daily' && (
               <select
                 value={selectedDailyOption}
-                onChange={(e) => {
-                  setSelectedDailyOption(e.target.value);
-                  handleRefresh();
-                }}
+                onChange={(e) => { setSelectedDailyOption(e.target.value); handleRefresh(); }}
                 className="bg-transparent border-none text-xs font-bold text-slate-700 outline-none cursor-pointer pr-1"
-                id="kpi-daily-select"
               >
-                <option value="hari-ini">Sabtu, 04 Jul 2026 (Hari Ini)</option>
-                <option value="kemarin">Jumat, 03 Jul 2026 (Kemarin)</option>
-                <option value="2-hari-lalu">Kamis, 02 Jul 2026</option>
-                <option value="3-hari-lalu">Rabu, 01 Jul 2026</option>
-                <option value="4-hari-lalu">Selasa, 30 Jun 2026</option>
-                <option value="5-hari-lalu">Senin, 29 Jun 2026</option>
-                <option value="6-hari-lalu">Minggu, 28 Jun 2026</option>
+                {getDateOptions('Daily').map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             )}
 
             {timeframe === 'Weekly' && (
               <select
                 value={selectedWeeklyOption}
-                onChange={(e) => {
-                  setSelectedWeeklyOption(e.target.value);
-                  handleRefresh();
-                }}
+                onChange={(e) => { setSelectedWeeklyOption(e.target.value); handleRefresh(); }}
                 className="bg-transparent border-none text-xs font-bold text-slate-700 outline-none cursor-pointer pr-1"
-                id="kpi-weekly-select"
               >
-                <option value="minggu-ini">Pekan Ini (28 Jun - 04 Jul 2026)</option>
-                <option value="minggu-lalu">Pekan Lalu (21 Jun - 27 Jun 2026)</option>
-                <option value="2-pekan-lalu">2 Pekan Lalu (14 Jun - 20 Jun 2026)</option>
-                <option value="3-pekan-lalu">3 Pekan Lalu (07 Jun - 13 Jun 2026)</option>
-                <option value="4-pekan-lalu">4 Pekan Lalu (31 Mei - 06 Jun 2026)</option>
+                {getDateOptions('Weekly').map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             )}
 
             {timeframe === 'Monthly' && (
               <select
                 value={selectedMonthlyOption}
-                onChange={(e) => {
-                  setSelectedMonthlyOption(e.target.value);
-                  handleRefresh();
-                }}
+                onChange={(e) => { setSelectedMonthlyOption(e.target.value); handleRefresh(); }}
                 className="bg-transparent border-none text-xs font-bold text-slate-700 outline-none cursor-pointer pr-1"
-                id="kpi-monthly-select"
               >
-                <option value="juli-2026">Juli 2026</option>
-                <option value="juni-2026">Juni 2026</option>
-                <option value="mei-2026">Mei 2026</option>
-                <option value="april-2026">April 2026</option>
-                <option value="maret-2026">Maret 2026</option>
-                <option value="februari-2026">Februari 2026</option>
+                {getDateOptions('Monthly').map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             )}
           </div>
@@ -1317,6 +1443,16 @@ export default function KpiDashboard({ menu }: { menu: string }) {
             <Download className="h-3.5 w-3.5" />
             <span>Ekspor</span>
           </button>
+
+          {menu !== 'KPI_RAWAT_JALAN' && menu !== 'KPI_BED_MANAGEMENT' && menu !== 'KPI_ANTRIAN' && (
+            <button
+              onClick={handleOpenManualInput}
+              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer mr-2"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>Input Manual</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1441,6 +1577,45 @@ export default function KpiDashboard({ menu }: { menu: string }) {
           </table>
         </div>
       </div>
+
+      {/* MODAL INPUT MANUAL KPI */}
+      {isManualModalOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in text-left">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-slate-50">
+              <h4 className="font-display font-bold text-headings">Input Data Manual: {activeKpi.title}</h4>
+              <button onClick={() => setIsManualModalOpen(false)} className="text-gray-400 hover:text-gray-700">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-gray-500 mb-4">Fitur ini digunakan jika data KPI belum tersedia di database lokal atau API SIMRS.</p>
+              
+              {manualData.map((field, idx) => (
+                <div key={idx} className="space-y-1">
+                  <label className="text-[11px] font-bold text-gray-600 uppercase">{field.label}</label>
+                  <input
+                    type="text"
+                    value={field.value}
+                    onChange={(e) => {
+                      const newData = [...manualData];
+                      newData[idx].value = e.target.value;
+                      setManualData(newData);
+                    }}
+                    className="w-full p-3 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-yasmin-green outline-none"
+                    placeholder={`Masukkan nilai ${field.label}`}
+                  />
+                </div>
+              ))}
+
+              <div className="pt-4 border-t border-gray-100 flex justify-end gap-2">
+                <button onClick={() => setIsManualModalOpen(false)} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-xs">Batal</button>
+                <button onClick={handleSaveManual} className="px-5 py-2.5 bg-yasmin-green text-white rounded-xl font-bold text-xs shadow-md">Simpan Data</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

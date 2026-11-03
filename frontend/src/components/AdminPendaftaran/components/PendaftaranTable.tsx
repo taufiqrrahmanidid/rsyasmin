@@ -12,7 +12,8 @@ import {
   Stethoscope,
   CreditCard,
   Banknote,
-  Smartphone
+  Smartphone,
+  Clock
 } from 'lucide-react';
 
 interface Props {
@@ -90,7 +91,7 @@ export default function PendaftaranTable({
               <th className="py-4 px-5">Info Tiket</th>
               <th className="py-4 px-5">Identitas Pasien</th>
               <th className="py-4 px-5">Klinis &amp; Jadwal</th>
-              <th className="py-4 px-5">Pembayaran</th>
+              <th className="py-4 px-5">Pembayaran & Biaya</th>
               <th className="py-4 px-5 text-center">SIMRS (Booking)</th>
               <th className="py-4 px-5 text-center">Status</th>
               <th className="py-4 px-5 text-right">Aksi</th>
@@ -178,7 +179,7 @@ export default function PendaftaranTable({
 
                   {/* 4. PEMBAYARAN & BUKTI TF */}
                   <td className="py-4 px-5 align-top">
-                    <div className="space-y-2">
+                    <div className="space-y-2 flex flex-col items-start">
                       {isTransfer ? (
                         <div className="inline-flex items-center space-x-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-1 rounded text-[10px] font-bold uppercase">
                           <CreditCard className="h-3 w-3" />
@@ -191,6 +192,11 @@ export default function PendaftaranTable({
                         </div>
                       )}
 
+                      {/* TAMBAHKAN NOMINAL BIAYA DI SINI */}
+                      <div className="font-mono font-black text-emerald-700 text-sm">
+                        Rp {((item as any).nominalBiaya || 135000).toLocaleString('id-ID')}
+                      </div>
+                      
                       {/* Lencana Bukti TF Sangat Menonjol */}
                       {isTransfer && hasFoto && (
                         <div className="inline-flex items-center space-x-1 bg-emerald-500 text-white px-2 py-0.5 rounded-full text-[9px] font-bold shadow-sm animate-pulse">

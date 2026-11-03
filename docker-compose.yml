@@ -1,90 +1,101 @@
 services:
-  # MySQL Database
-  mysql:
-    image: mysql:8.0-alpine
-    container_name: yasmin-mysql
+  postgres:
+    image: postgres:16-alpine
+    container_name: yasmin-postgres
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root123}
-      MYSQL_DATABASE: ${DB_NAME:-yasmin_rs}
-      MYSQL_USER: ${DB_USER:-yasmin_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-yasmin_pass}
-    ports:
-      - "3306:3306"
+      POSTGRES_USER: ${DB_USER:-yasmin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD wajib di .env root}
+      POSTGRES_DB: ${DB_NAME:-yasmin}
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - yasmin_net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-yasmin} -d ${DB_NAME:-yasmin}"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    networks:
-      - yasmin-net
+      retries: 10
+      start_period: 30s
 
-  # Backend API
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: yasmin-api
+    container_name: yasmin-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: ${DATABASE_URL:-mysql://yasmin_user:yasmin_pass@mysql:3306/yasmin_rs}
-      JWT_SECRET: ${JWT_SECRET:-change-this-secret-key-in-production}
-      SIMRS_BASE_URL: ${SIMRS_BASE_URL:-http://localhost:8088/api}
       PORT: 8000
-    ports:
-      - "8000:8000"
-    depends_on:
-      mysql:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
+      DATABASE_URL: postgresql://${DB_USER:-yasmin}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-yasmin}?schema=yasmin
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET wajib di .env root}
+      DEVICE_BOOTSTRAP_SECRET: ${DEVICE_BOOTSTRAP_SECRET:?DEVICE_BOOTSTRAP_SECRET wajib di .env root}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL wajib di .env root}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS wajib di .env root}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?SETTINGS_ENCRYPTION_KEY wajib di .env root}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      RS_YASMIN_PLACE_ID: ${RS_YASMIN_PLACE_ID:-}
+      SIMRS_BASE_URL: ${SIMRS_BASE_URL:-}
+      SIMRS_API_KEY: ${SIMRS_API_KEY:-}
     networks:
-      - yasmin-net
-    restart: unless-stopped
+      - yasmin_net
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
-  # Frontend
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: yasmin-web
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-      NODE_ENV: ${NODE_ENV:-development}
-    ports:
-      - "5173:5173"
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    networks:
-      - yasmin-net
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-}
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+    container_name: yasmin-frontend
     restart: unless-stopped
+    networks:
+      - yasmin_net
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=64m,mode=1777
+      - /var/run:size=8m,mode=1777
+      - /tmp:size=64m,mode=1777
+      - /var/log/nginx:size=8m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
 
-  # Nginx Reverse Proxy (Production-like)
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     container_name: yasmin-nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./frontend/dist:/usr/share/nginx/html:ro
-    depends_on:
-      - backend
-      - frontend
     networks:
-      - yasmin-net
-    restart: unless-stopped
+      - yasmin_net
 
 volumes:
-  mysql_data:
-    driver: local
+  postgres_data:
 
 networks:
-  yasmin-net:
+  yasmin_net:
     driver: bridge

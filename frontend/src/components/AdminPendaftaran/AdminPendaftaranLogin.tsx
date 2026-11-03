@@ -19,6 +19,7 @@ export default function AdminPendaftaranLogin({ onLoginSuccess }: Props) {
       // Panggil API Login PostgreSQL Port 5000
       const res = await fetch(import.meta.env.VITE_BACKEND_URL + '/api/auth/login', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password })
       });
@@ -28,8 +29,7 @@ export default function AdminPendaftaranLogin({ onLoginSuccess }: Props) {
         throw new Error(data.error || 'Email atau kata sandi salah.');
       }
 
-      // Simpan token ke localStorage
-      localStorage.setItem('admin_token', data.token);
+      // Simpan data user (cookie httpOnly dikelola otomatis oleh browser)
       localStorage.setItem('admin_user', JSON.stringify(data.user));
       onLoginSuccess(data.user);
     } catch (err: any) {

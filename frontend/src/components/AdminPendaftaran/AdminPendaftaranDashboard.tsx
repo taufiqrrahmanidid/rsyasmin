@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import type { Pendaftaran, PendaftaranStatus, PendaftaranSource } from './types';
 import { fetchPendaftaranList } from './adminApi';
-import { logoutAdminPendaftaran } from '../../lib/firebase';
+import { logoutAdminPendaftaran } from '../../lib/db';
 import PendaftaranTable from './components/PendaftaranTable';
 import PendaftaranDetailDrawer from './components/PendaftaranDetailDrawer';
 import { 
@@ -65,7 +65,7 @@ export default function AdminPendaftaranDashboard({ adminEmail, onExit }: Props)
 });
 
   // 1. Verifikasi Lisensi Perangkat PC Admin Ketat
-  useEffect(() => {
+    useEffect(() => {
     const verifyDevice = async () => {
       let hash = localStorage.getItem('admin_device_hash');
       if (!hash) {
@@ -76,38 +76,36 @@ export default function AdminPendaftaranDashboard({ adminEmail, onExit }: Props)
       try {
         const res = await fetch(import.meta.env.VITE_BACKEND_URL + '/api/admin/verify-device', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             deviceHash: hash,
-            deviceName: 'PC Admin Loket',
-            adminEmail
+            deviceName: 'PC Admin Pendaftaran',
+            adminEmail: adminEmail || 'belum-login@rsyasmin.id'
           })
         });
         const data = await res.json();
         
         if (res.ok && data.authorized) {
-          localStorage.removeItem('admin_device_blocked'); 
-          localStorage.removeItem('admin_device_error'); // Bersihkan error jika sudah diizinkan
+          localStorage.removeItem('admin_device_blocked');
+          localStorage.removeItem('admin_device_error');
           setIsDeviceAuthorized(true);
           setDeviceName(data.deviceName);
         } else {
-          // Tandai perangkat diblokir dan simpan pesan asli dari backend
           localStorage.setItem('admin_device_blocked', 'true');
-          if (data.error) {
-              localStorage.setItem('admin_device_error', data.error);
-          }
+          if (data.error) localStorage.setItem('admin_device_error', data.error);
           setIsDeviceAuthorized(false);
           setLicenseError(data.error || 'Perangkat ini belum memiliki lisensi resmi dari IT RS Yasmin.');
         }
-      } catch (err: any) {
-        localStorage.setItem('admin_device_blocked', 'true');
+      } catch (err) {
         setIsDeviceAuthorized(false);
-        setLicenseError('Gagal terhubung ke server lisensi. Akses dibatasi demi keamanan.');
+        setLicenseError('Gagal terhubung ke server lisensi. Akses dibatasi.');
       }
     };
 
     verifyDevice();
   }, [adminEmail]);
+  
 
   // MODAL LINK GENERATOR
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
@@ -133,6 +131,15 @@ export default function AdminPendaftaranDashboard({ adminEmail, onExit }: Props)
       const data = await fetchPendaftaranList({});
       setAllItems(data);
     } catch (err: any) {
+      // 👇 TAMBAHKAN BLOK INI UNTUK DETEKSI SESI EXPIRED 👇
+      if (err.message.includes('401') || err.message.includes('Autentikasi') || err.message.includes('Gagal mengambil data')) {
+        alert('Sesi login Anda telah berakhir. Silakan login kembali.');
+        localStorage.removeItem('admin_user');
+        window.location.reload(); // Memaksa kembali ke halaman login
+        return;
+      }
+      // 👆 ========================================== 👆
+
       if (opts?.silent) {
         console.warn('Polling pendaftaran:', err);
       } else {
@@ -176,6 +183,7 @@ export default function AdminPendaftaranDashboard({ adminEmail, onExit }: Props)
     try {
       const res = await fetch(import.meta.env.VITE_BACKEND_URL + '/api/invite-link', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           patientName: genPatientName.trim(),

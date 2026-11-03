@@ -55,13 +55,14 @@ import {
   RefreshCw,
   RotateCcw,
   Layers,
-  ShieldAlert, Newspaper, MonitorSmartphone, KeyRound, Lock, UserPlus, CheckCircle2
+  ShieldAlert, Newspaper, MonitorSmartphone, KeyRound, Lock, UserPlus, CheckCircle2,
+  CreditCard
 } from 'lucide-react';
 import { Doctor, HospitalRoom } from '../types';
 import KpiDashboard from './KpiDashboards';
 import DatabaseExportManager from './DatabaseExportManager';
-import { fetchCollection, syncCollectionToCloud, saveDocument, db } from '../lib/firebase';
-import { doc, getDoc } from '../lib/firebase';
+import { fetchCollection, syncCollectionToCloud, saveDocument, db, deleteDocument } from '../lib/db';
+import { doc, getDoc } from '../lib/db';
 
 interface AdminDashboardProps {
   onClose: () => void;
@@ -288,10 +289,10 @@ export const INITIAL_ROOMS: HospitalRoom[] = [
   }
 ];
 
-type ActiveMenu = 'NAMA_RS' | 'DATA_POLY' | 'DATA_SPESIALIS' | 'DATA_DOKTER' | 'DATA_PRAKTEK' | 'SOSIAL_MEDIA' | 'BERITA' | 'ULASAN_GOOGLE'  | 'KAMAR_RAWAT_INAP' | 'KAMAR_ICU' | 'KAMAR_IGD'
+type ActiveMenu = 'NAMA_RS' | 'DATA_POLY' | 'DATA_SPESIALIS' | 'DATA_DOKTER' | 'DATA_PRAKTEK' | 'MITRA_PENJAMIN' | 'METODE_PEMBAYARAN' | 'SOSIAL_MEDIA' | 'BERITA' | 'ULASAN_GOOGLE'  | 'KAMAR_RAWAT_INAP' | 'KAMAR_ICU' | 'KAMAR_IGD'
   | 'KPI_RAWAT_JALAN' | 'KPI_RAWAT_INAP' | 'KPI_IGD' | 'KPI_ICU' | 'KPI_HCU' | 'KPI_NICU' | 'KPI_PICU' | 'KPI_PERINATOLOGI' | 'KPI_KAMAR_OPERASI' | 'KPI_CSSD' | 'KPI_HEMODIALISA'
   | 'KPI_MCU' | 'KPI_REHABILITASI_MEDIK' | 'KPI_HOME_CARE' | 'KPI_AMBULANCE' | 'KPI_BED_MANAGEMENT' | 'KPI_ANTRIAN' | 'KPI_RUJUKAN_PASIEN' | 'KPI_ANALISA_RUJUKAN' | 'KPI_KINERJA_PELAYANAN'
-  | 'FEED_SOSMED' | 'ARTIKEL' | 'MANAJEMEN_USER' | 'LISENSI_PERANGKAT';
+  | 'FEED_SOSMED' | 'ARTIKEL' | 'MANAJEMEN_USER' | 'LISENSI_PERANGKAT'| 'LAPORAN_PASIEN'| 'PENGATURAN_SISTEM' | 'AUDIT_LOG' | 'KATEGORI_SPESIALIS';
 
 const getMenuTitle = (menu: ActiveMenu): string => {
   switch (menu) {
@@ -310,6 +311,7 @@ const getMenuTitle = (menu: ActiveMenu): string => {
     case 'ARTIKEL': return 'Manajemen Artikel & Blog Kesehatan';
     case 'MANAJEMEN_USER': return 'Hak Akses & Manajemen User (RBAC)';
     case 'LISENSI_PERANGKAT': return 'Kontrol Keamanan Lisensi Perangkat';
+    case 'LAPORAN_PASIEN': return 'Laporan Saran & Pengaduan Pasien';
     default:
       if (menu.startsWith('KPI_')) {
         const name = menu.replace('KPI_', '').replace(/_/g, ' ');
@@ -327,9 +329,33 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
   const [adminSession, setAdminSession] = useState<any>(() => {
     try {
       const s = localStorage.getItem('master_admin_session');
-      return s ? JSON.parse(s) : null;
+      return s ? JSON.parse(s) : null; 
     } catch (e) { return null; }
   });
+
+  // Auto-Redirect untuk Staf Loket (Admin Pendaftaran)
+  useEffect(() => {
+    if (adminSession && adminSession.role === 'User') {
+      const perms = adminSession.permissions || [];
+      // Jika dia punya akses pendaftaran, TAPI tidak punya akses master data/konten/laporan
+      // Maka dia murni staf loket. Lempar ke /admin/pendaftaran!
+      if (
+        perms.includes('MENU_PENDAFTARAN') && 
+        !perms.includes('MENU_MASTER_DATA') && 
+        !perms.includes('MENU_CONTENT') && 
+        !perms.includes('MENU_PATIENT_FEEDBACK')
+      ) {
+        window.location.href = '/admin/pendaftaran';
+      }
+    }
+  }, [adminSession]);
+
+  // Fungsi untuk mengecek hak akses
+  const hasAccess = (permission: string) => {
+    if (adminSession?.role === 'Master' || adminSession?.role === 'SuperUser') return true; // Master & Direktur bypass
+    return adminSession?.permissions?.includes(permission);
+  };
+  
 
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -343,19 +369,16 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
 
     try {
       const API_BASE = import.meta.env.VITE_BACKEND_URL;
-      const token = localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: loginEmail, password: loginPassword })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       
+      localStorage.setItem('admin_user', JSON.stringify(data.user));
       localStorage.setItem('master_admin_session', JSON.stringify(data.user));
       setAdminSession(data.user);
     } catch (err: any) {
@@ -365,7 +388,11 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+    } catch(e) {}
+    localStorage.removeItem('admin_user');
     localStorage.removeItem('master_admin_session');
     setAdminSession(null);
   };
@@ -598,40 +625,67 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
 
   // Google Reviews Kurasi State
   const [googleReviewsList, setGoogleReviewsList] = useState<any[]>([]);
+  const [filterLimit, setFilterLimit] = useState<string>('10');
+  const [filterRating, setFilterRating] = useState<string>('');
+  const [filterDatePreset, setFilterDatePreset] = useState<string>('all');
   const [isSyncingGmaps, setIsSyncingGmaps] = useState(false);
   const [gmapsSyncMsg, setGmapsSyncMsg] = useState('');
 
-  // Muat data ulasan dari Firestore
   const loadGoogleReviews = async () => {
     try {
-      const { fetchAllGoogleReviewsForAdmin } = await import('../lib/googleReviewsService');
-      const data = await fetchAllGoogleReviewsForAdmin();
-      setGoogleReviewsList(data);
+      const params = new URLSearchParams();
+      if (filterLimit) params.append('limit', filterLimit);
+      if (filterRating) params.append('minRating', filterRating);
+      
+      if (filterDatePreset !== 'all') {
+        const end = new Date();
+        const start = new Date();
+        // Set jam akhir ke 23:59:59 agar mencakup seluruh hari ini
+        end.setHours(23, 59, 59, 999);
+        
+        if (filterDatePreset === '1_month') start.setMonth(end.getMonth() - 1);
+        if (filterDatePreset === '3_months') start.setMonth(end.getMonth() - 3);
+        
+        params.append('startDate', start.toISOString());
+        params.append('endDate', end.toISOString());
+      }
+
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/reviews?${params.toString()}`, {
+        credentials: 'include'
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setGoogleReviewsList(data);
+      }
     } catch (e) {
       console.error('Error load reviews:', e);
     }
   };
 
+  // Tambahkan useEffect agar filter langsung bekerja saat diubah
   useEffect(() => {
     if (activeMenu === 'ULASAN_GOOGLE') {
       loadGoogleReviews();
     }
-  }, [activeMenu]);
+  }, [activeMenu, filterLimit, filterRating, filterDatePreset]);
 
   // Handler Tombol "Sinkronkan Ulasan Google Maps"
-  const handleSyncFromGoogle = async () => {
+    const handleSyncFromGoogle = async () => {
     setIsSyncingGmaps(true);
-    setGmapsSyncMsg('Menghubungi server Google Maps RS Yasmin...');
+    setGmapsSyncMsg('Menghubungi Google API...');
     try {
       const { syncGoogleReviewsFromMaps } = await import('../lib/googleReviewsService');
       const res = await syncGoogleReviewsFromMaps();
       await loadGoogleReviews();
-      setGmapsSyncMsg(`✅ Berhasil menyinkronkan! Total ${res.total} ulasan Google Maps tersedia.`);
+      
+      const sourceName = res.source === 'gbp' ? 'Business Profile (Data Lengkap)' : 'Places (5 Data Terakhir)';
+      setGmapsSyncMsg(`✅ Berhasil! Menarik ${res.total} ulasan via ${sourceName}.`);
     } catch (e: any) {
       setGmapsSyncMsg('⚠️ Gagal sinkronisasi: ' + e.message);
     } finally {
       setIsSyncingGmaps(false);
-      setTimeout(() => setGmapsSyncMsg(''), 4000);
+      setTimeout(() => setGmapsSyncMsg(''), 6000);
     }
   };
 
@@ -645,6 +699,38 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
       alert('Gagal mengubah status tampil.');
     }
   };
+
+  const [feedbacks, setFeedbacks] = useState<any[]>([]);
+  const [selectedFeedback, setSelectedFeedback] = useState<any>(null);
+
+  const loadFeedbacks = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/feedback`, { credentials: 'include' });
+      if (res.ok) setFeedbacks(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'LAPORAN_PASIEN') loadFeedbacks();
+  }, [activeMenu]);
+
+  const handleUpdateFeedbackStatus = async (id: string, newStatus: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/feedback/${id}/status`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        setFeedbacks(prev => prev.map(f => f.id === id ? { ...f, status: newStatus } : f));
+        if (selectedFeedback?.id === id) setSelectedFeedback((prev: any) => ({ ...prev, status: newStatus }));
+      }
+    } catch (e) { alert('Gagal update status'); }
+  };
+
+  const [searchFeedback, setSearchFeedback] = useState('');
+  const [filterFeedbackStatus, setFilterFeedbackStatus] = useState('all');
 
   // Persistent search & filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -662,25 +748,30 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     name: string;
   } | null>(null);
 
-  const executeDelete = (type: 'DOCTOR' | 'POLY' | 'SPECIALIST' | 'SOCIAL' | 'ANNOUNCEMENT' | 'ROOM', id: string) => {
-    if (type === 'DOCTOR') {
-      const updated = doctors.filter(d => d.id !== id);
-      onUpdateDoctors(updated);
-    } else if (type === 'POLY') {
-      const updated = polyclinics.filter(p => p.code !== id);
-      setPolyclinics(updated);
-    } else if (type === 'SPECIALIST') {
-      const updated = specialists.filter(s => s.code !== id);
-      setSpecialists(updated);
-    } else if (type === 'SOCIAL') {
-      const updated = socialMediaLinks.filter(s => s.id !== id);
-      setSocialMediaLinks(updated);
-    } else if (type === 'ANNOUNCEMENT') {
-      const updated = announcements.filter(a => a.id !== id);
-      setAnnouncements(updated);
-    } else if (type === 'ROOM') {
-      const updated = rooms.filter(r => r.id !== id);
-      setRooms(updated);
+    const executeDelete = async (type: 'DOCTOR' | 'POLY' | 'SPECIALIST' | 'SOCIAL' | 'ANNOUNCEMENT' | 'ROOM', id: string) => {
+    try {
+      if (type === 'DOCTOR') {
+        await deleteDocument('doctors', id);
+        onUpdateDoctors(doctors.filter(d => d.id !== id));
+      } else if (type === 'POLY') {
+        await deleteDocument('polyclinics', id);
+        setPolyclinics(polyclinics.filter(p => p.code !== id));
+      } else if (type === 'SPECIALIST') {
+        await deleteDocument('specialists', id);
+        setSpecialists(specialists.filter(s => s.code !== id));
+      } else if (type === 'SOCIAL') {
+        await deleteDocument('social_media', id);
+        setSocialMediaLinks(socialMediaLinks.filter(s => s.id !== id));
+      } else if (type === 'ANNOUNCEMENT') {
+        await deleteDocument('announcements', id);
+        setAnnouncements(announcements.filter(a => a.id !== id));
+      } else if (type === 'ROOM') {
+        await deleteDocument('rooms', id);
+        setRooms(rooms.filter(r => r.id !== id));
+      }
+      alert('Data berhasil dihapus permanen dari database!');
+    } catch (e: any) {
+      alert(`Gagal menghapus data: ${e.message}`);
     }
   };
   // State untuk Manajemen Feed Sosmed
@@ -715,12 +806,11 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
       }
 
       // 2. Lanjutkan proses fetch ke backend seperti biasa
-      const token = localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/api/social-feed/sync-youtube`, {
         method: 'POST',
+        credentials: 'include', 
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(ytSyncConfig)
       });
@@ -757,13 +847,12 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     e.preventDefault();
     setIsSavingFeed(true);
     try {
-      const token = localStorage.getItem('admin_token'); // Ambil KTP/Token Admin
 
       const res = await fetch(`${API_BASE}/api/social-feed`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` // Tunjukkan ke server!
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(newFeed)
       });
@@ -784,11 +873,11 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
 
   const handleDeleteFeed = async (id: string) => {
     if (window.confirm('Hapus postingan ini dari website?')) {
-      const token = localStorage.getItem('admin_token'); // Ambil Token
       
       await fetch(`${API_BASE}/api/social-feed/${id}`, { 
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` } // Tunjukkan ke server!
+        // headers: { 'Authorization': `Bearer ${token}` }, // Tunjukkan ke server!
+        credentials: 'include'
       });
       setSocialFeeds(socialFeeds.filter(f => f.id !== id));
     }
@@ -803,19 +892,39 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
 
   // Form Artikel
   const [newArticle, setNewArticle] = useState({ title: '', content: '', category: 'Kesehatan Edukasi', coverImage: '' });
+  const [editingArticleId, setEditingArticleId] = useState<string | null>(null);
   
   // Form User Baru
-  const [newUser, setNewUser] = useState({ email: '', password: '', name: '', role: 'User' });
+  const [newUser, setNewUser] = useState({ 
+    email: '', 
+    password: '', 
+    name: '', 
+    role: 'User',
+    permissions: [] as string[] // 👈 TAMBAHKAN INI
+  });
+
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
   // Tarik data saat menu diklik
   useEffect(() => {
+    if (!adminSession) return;
     const API_BASE = import.meta.env.VITE_BACKEND_URL;
+
     if (activeMenu === 'ARTIKEL') {
-      fetch(`${API_BASE}/api/articles`).then(res => res.json()).then(data => setArticles(Array.isArray(data) ? data : []));
+      fetch(`${API_BASE}/api/articles`, { credentials: 'include' })
+        .then(res => res.json())
+        .then(data => setArticles(Array.isArray(data) ? data : []))
+        .catch(e => console.error(e));
     } else if (activeMenu === 'MANAJEMEN_USER' && (adminSession?.role === 'Master' || adminSession?.role === 'SuperUser')) {
-      fetch(`${API_BASE}/api/admin/users`).then(res => res.json()).then(data => setAdminUsers(Array.isArray(data) ? data : []));
+      fetch(`${API_BASE}/api/admin/users`, { credentials: 'include' })
+        .then(res => res.json())
+        .then(data => setAdminUsers(Array.isArray(data) ? data : []))
+        .catch(e => console.error(e));
     } else if (activeMenu === 'LISENSI_PERANGKAT' && (adminSession?.role === 'Master' || adminSession?.role === 'SuperUser')) {
-      fetch(`${API_BASE}/api/admin/devices`).then(res => res.json()).then(data => setDeviceLicenses(Array.isArray(data) ? data : []));
+      fetch(`${API_BASE}/api/admin/devices`, { credentials: 'include' })
+        .then(res => res.json())
+        .then(data => setDeviceLicenses(Array.isArray(data) ? data : []))
+        .catch(e => console.error(e));
     }
   }, [activeMenu, adminSession]);
 
@@ -824,18 +933,48 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     e.preventDefault();
     const API_BASE = import.meta.env.VITE_BACKEND_URL;
     try {
-      const token = localStorage.getItem('admin_token');
-
-      const res = await fetch(`${API_BASE}/api/articles`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ ...newArticle, author: adminSession?.name || 'Admin' })
+      const isEditing = !!editingArticleId;
+      
+      const res = await fetch(`${API_BASE}/api/articles${isEditing ? `/${editingArticleId}` : ''}`, {
+        method: isEditing ? 'PATCH' : 'POST', 
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ ...newArticle, author: adminSession?.name || 'Admin' })
       });
+      
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error');
+
       if (data.success) {
-        setArticles([data.article, ...articles]);
+        if (isEditing) {
+          setArticles(articles.map(a => a.id === editingArticleId ? data.article : a));
+          alert('Artikel berhasil diperbarui!');
+        } else {
+          setArticles([data.article, ...articles]);
+          alert('Artikel berhasil diterbitkan!');
+        }
         setNewArticle({ title: '', content: '', category: 'Kesehatan Edukasi', coverImage: '' });
-        alert('Artikel berhasil diterbitkan!');
+        setEditingArticleId(null); // Reset mode edit
       }
-    } catch (err) { alert('Gagal menyimpan artikel.'); }
+    } catch (err: any) { 
+      alert(`Gagal menyimpan artikel: ${err.message}`); 
+    }
+  };
+
+  // Tambahkan fungsi hapus artikel ini tepat di bawahnya
+  const handleDeleteArticle = async (id: string) => {
+    if (!window.confirm('Yakin ingin menghapus artikel ini permanen?')) return;
+    const API_BASE = import.meta.env.VITE_BACKEND_URL;
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      if (res.ok) {
+        setArticles(articles.filter(a => a.id !== id));
+        alert('Artikel dihapus.');
+      }
+    } catch (err) { alert('Gagal menghapus artikel.'); }
   };
 
   // Fungsi ubah gambar lokal ke Base64 untuk Artikel
@@ -858,25 +997,81 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     e.preventDefault();
     const API_BASE = import.meta.env.VITE_BACKEND_URL;
     try {
-      const token = localStorage.getItem('admin_token');
+      const isEditing = !!editingUserId;
+      const url = isEditing 
+        ? `${API_BASE}/api/admin/users/${editingUserId}` 
+        : `${API_BASE}/api/admin/users`;
+      
+      const res = await fetch(url, {
+        method: isEditing ? 'PUT' : 'POST', 
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(newUser)
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        alert(isEditing ? 'User berhasil diperbarui!' : 'User berhasil dibuat!');
+        fetch(`${API_BASE}/api/admin/users`, { credentials: 'include' })
+          .then(res => res.json())
+          .then(data => setAdminUsers(Array.isArray(data) ? data : []));
+        
+        // Reset Form & Mode Edit
+        setNewUser({ email: '', password: '', name: '', role: 'User', permissions: [] });
+        setEditingUserId(null);
+      } else { alert(data.error); }
+    } catch (err) { alert('Gagal menyimpan user.'); }
+  };
 
-      const res = await fetch(`${API_BASE}/api/admin/users`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(newUser)
+  // Fungsi untuk membuka form Edit
+  const handleOpenEditUser = (user: any) => {
+    setNewUser({
+      email: user.email,
+      password: '', // Kosongkan, diisi hanya jika ingin ganti sandi
+      name: user.name || '',
+      role: user.role,
+      permissions: user.permissions || []
+    });
+    setEditingUserId(user.id);
+    window.scrollTo({ top: 0, behavior: 'smooth' }); // Scroll ke atas agar form terlihat
+  };
+
+  // Fungsi untuk membatalkan Edit
+  const handleCancelEdit = () => {
+    setEditingUserId(null);
+    setNewUser({ email: '', password: '', name: '', role: 'User', permissions: [] });
+  };
+
+  const handleDeleteUser = async (id: string, email: string) => {
+    if (email === adminSession.email) {
+      return alert('Anda tidak bisa menghapus akun Anda sendiri.');
+    }
+    if (!window.confirm(`Yakin ingin menghapus akun ${email}?`)) return;
+    
+    const API_BASE = import.meta.env.VITE_BACKEND_URL;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users/${id}`, {
+        method: 'DELETE',
+        // headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'include'
       });
       const data = await res.json();
-      if (data.success) {
-        alert('User berhasil dibuat!');
-        fetch(`${API_BASE}/api/admin/users`).then(res => res.json()).then(data => setAdminUsers(Array.isArray(data) ? data : []));
-      } else { alert(data.error); }
-    } catch (err) { alert('Gagal membuat user.'); }
+      
+      if (res.ok) {
+        setAdminUsers(adminUsers.filter(u => u.id !== id));
+        alert('User berhasil dihapus.');
+      } else {
+        alert(data.error);
+      }
+    } catch (err) { alert('Gagal menghapus user.'); }
   };
 
   // Fungsi Toggle Lisensi Perangkat
   const handleToggleLicense = async (id: string) => {
     const API_BASE = import.meta.env.VITE_BACKEND_URL;
     try {
-      const token = localStorage.getItem('admin_token');
-      const res = await fetch(`${API_BASE}/api/admin/devices/${id}/toggle`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await fetch(`${API_BASE}/api/admin/devices/${id}/toggle`, { method: 'PATCH', credentials: 'include' });
       if (res.ok) {
         setDeviceLicenses(prev => prev.map(d => d.id === id ? { ...d, isAllowed: !d.isAllowed } : d));
       }
@@ -887,18 +1082,79 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
   const handleToggleArticle = async (id: string) => {
     const API_BASE = import.meta.env.VITE_BACKEND_URL;
     try {
-      const token = localStorage.getItem('admin_token');
-      const res = await fetch(`${API_BASE}/api/articles/${id}/toggle`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await fetch(`${API_BASE}/api/articles/${id}/toggle`, { method: 'PATCH', credentials: 'include' });
       if (res.ok) {
         setArticles(prev => prev.map(a => a.id === id ? { ...a, isPublished: !a.isPublished } : a));
       }
     } catch (e) { alert('Gagal mengubah status artikel.'); }
   };
+
+  // State untuk Pengaturan Sistem (API Google Review)
+  const [apiSettings, setApiSettings] = useState<any[]>([]);
+  const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/settings`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setApiSettings(data);
+        // Inisialisasi form dengan value yang sudah ada (masked)
+        const form: Record<string, string> = {};
+        data.forEach((s: any) => form[s.key] = s.isSecret ? '' : s.value);
+        setSettingsForm(form);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'PENGATURAN_SISTEM') loadSettings();
+  }, [activeMenu]);
+
+  const handleSaveSettings = async () => {
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/settings`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: settingsForm })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`Berhasil menyimpan ${data.updated.length} pengaturan.`);
+        loadSettings();
+      } else {
+        alert(data.error);
+      }
+    } catch (e) { alert('Gagal menyimpan setting.'); }
+    finally { setIsSavingSettings(false); }
+  };
+
+    // State untuk Audit Log
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [searchAudit, setSearchAudit] = useState('');
+
+  const loadAuditLogs = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/audit-logs?limit=100&search=${searchAudit}`, { 
+        credentials: 'include' 
+      });
+      if (res.ok) setAuditLogs(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'AUDIT_LOG') loadAuditLogs();
+  }, [activeMenu, searchAudit]);
   
   // Forms states
   const [currentDoctor, setCurrentDoctor] = useState<Partial<Doctor>>({});
   const [currentPoly, setCurrentPoly] = useState<Partial<Polyclinic>>({});
   const [currentSpecialist, setCurrentSpecialist] = useState<Partial<Specialist>>({});
+  const [partners, setPartners] = useState<any[]>([]);
+  const [currentPartner, setCurrentPartner] = useState<any>({});
   const [currentSocial, setCurrentSocial] = useState<Partial<SocialMedia>>({});
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Partial<Announcement>>({});
 
@@ -975,30 +1231,31 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
   // Load and refresh bookings for calculating used and remaining quota
   const [bookings, setBookings] = useState<any[]>([]);
 
-  useEffect(() => {
-    const loadBookings = async () => {
-      try {
-        const cloudBookings = await fetchCollection('bookings');
-        if (cloudBookings.length > 0) {
-          setBookings(cloudBookings);
-          localStorage.setItem('yasmin_bookings', JSON.stringify(cloudBookings));
-          return;
-        }
-      } catch (e) {
-        console.error('Failed to fetch bookings from Firestore:', e);
-      }
-
-      const savedBookings = localStorage.getItem('yasmin_bookings');
-      if (savedBookings) {
+      useEffect(() => {
+      if (!adminSession) return;
+      const loadBookings = async () => {
         try {
-          setBookings(JSON.parse(savedBookings));
+          const cloudBookings = await fetchCollection('bookings');
+          if (cloudBookings.length > 0) {
+            setBookings(cloudBookings);
+            localStorage.setItem('yasmin_bookings', JSON.stringify(cloudBookings));
+            return;
+          }
         } catch (e) {
-          console.error('Failed to parse yasmin_bookings:', e);
+          console.error('Failed to fetch bookings:', e);
         }
-      }
-    };
-    loadBookings();
-  }, [activeMenu]);
+  
+        const savedBookings = localStorage.getItem('yasmin_bookings');
+        if (savedBookings) {
+          try {
+            setBookings(JSON.parse(savedBookings));
+          } catch (e) {
+            console.error('Failed to parse yasmin_bookings:', e);
+          }
+        }
+      };
+      loadBookings();
+    }, [activeMenu, adminSession]);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1194,8 +1451,10 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     );
   };
 
-  // Load initial data from Firestore
+  // Load initial data
   useEffect(() => {
+    if (!adminSession) return;
+
     const loadData = async () => {
       try {
         isInitialLoadRef.current = true;
@@ -1248,6 +1507,12 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
         } else {
           await syncCollectionToCloud('rooms', rooms);
         }
+
+        // 7. Doctors
+        const cloudDoctors = await fetchCollection('doctors');
+        if (cloudDoctors.length === 0 && doctors.length > 0) {
+          await syncCollectionToCloud('doctors', doctors);
+        }
       } catch (error) {
         console.error("Error loading initial data from Firestore:", error);
       } finally {
@@ -1258,20 +1523,16 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     };
 
     loadData();
-  }, []);
+  }, [adminSession]);
 
   // Save changes
   useEffect(() => {
     localStorage.setItem('admin_rs_info', JSON.stringify(rsInfo));
-    if (!isInitialLoadRef.current) {
-      saveDocument('rs_info', 'hospital_info', rsInfo);
-    }
   }, [rsInfo]);
 
   useEffect(() => {
     localStorage.setItem('admin_polyclinics', JSON.stringify(polyclinics));
     if (!isInitialLoadRef.current) {
-      syncCollectionToCloud('polyclinics', polyclinics);
     }
   }, [polyclinics]);
 
@@ -1329,20 +1590,17 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSaveSocial = (e: React.FormEvent) => {
+    const handleSaveSocial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentSocial.platform || !currentSocial.url) {
-      alert('Mohon isi platform dan link URL!');
-      return;
-    }
-    let updated;
-    if (modalType === 'ADD') {
-      updated = [...socialMediaLinks, currentSocial as SocialMedia];
-    } else {
-      updated = socialMediaLinks.map(s => s.id === currentSocial.id ? (currentSocial as SocialMedia) : s);
-    }
-    setSocialMediaLinks(updated);
-    setIsModalOpen(false);
+    if (!currentSocial.platform || !currentSocial.url) return alert('Isi platform dan link URL!');
+    try {
+      const id = currentSocial.id as string;
+      await saveDocument('social_media', id, currentSocial);
+      let updated = modalType === 'ADD' ? [...socialMediaLinks, currentSocial as SocialMedia] : socialMediaLinks.map(s => s.id === id ? currentSocial as SocialMedia : s);
+      setSocialMediaLinks(updated);
+      setIsModalOpen(false);
+      alert('Sosial media berhasil disimpan!');
+    } catch (err: any) { alert(`Gagal: ${err.message}`); }
   };
 
   // Announcement handlers
@@ -1368,20 +1626,17 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSaveAnnouncement = (e: React.FormEvent) => {
+  const handleSaveAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentAnnouncement.image) {
-      alert('Mohon upload file pengumuman/gambar!');
-      return;
-    }
-    let updated;
-    if (modalType === 'ADD') {
-      updated = [...announcements, currentAnnouncement as Announcement];
-    } else {
-      updated = announcements.map(a => a.id === currentAnnouncement.id ? (currentAnnouncement as Announcement) : a);
-    }
-    setAnnouncements(updated);
-    setIsModalOpen(false);
+    if (!currentAnnouncement.image) return alert('Mohon upload gambar!');
+    try {
+      const id = currentAnnouncement.id as string;
+      await saveDocument('announcements', id, currentAnnouncement);
+      let updated = modalType === 'ADD' ? [...announcements, currentAnnouncement as Announcement] : announcements.map(a => a.id === id ? currentAnnouncement as Announcement : a);
+      setAnnouncements(updated);
+      setIsModalOpen(false);
+      alert('Pengumuman berhasil disimpan!');
+    } catch (err: any) { alert(`Gagal: ${err.message}`); }
   };
 
   // Room handlers
@@ -1413,20 +1668,17 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSaveRoom = (e: React.FormEvent) => {
+  const handleSaveRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentRoom.name || !currentRoom.class) {
-      alert('Mohon isi nama kamar dan kelas kamar!');
-      return;
-    }
-    let updated;
-    if (modalType === 'ADD') {
-      updated = [...rooms, currentRoom as HospitalRoom];
-    } else {
-      updated = rooms.map(r => r.id === currentRoom.id ? (currentRoom as HospitalRoom) : r);
-    }
-    setRooms(updated);
-    setIsModalOpen(false);
+    if (!currentRoom.name || !currentRoom.class) return alert('Isi nama dan kelas kamar!');
+    try {
+      const id = currentRoom.id as string;
+      await saveDocument('rooms', id, currentRoom);
+      let updated = modalType === 'ADD' ? [...rooms, currentRoom as HospitalRoom] : rooms.map(r => r.id === id ? currentRoom as HospitalRoom : r);
+      setRooms(updated);
+      setIsModalOpen(false);
+      alert('Data Kamar berhasil disimpan!');
+    } catch (err: any) { alert(`Gagal: ${err.message}`); }
   };
 
   const handleAnnouncementUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1446,11 +1698,16 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
   };
 
   // Handle Save Hospital Info
-  const handleSaveHospitalInfo = (e: React.FormEvent) => {
+  const handleSaveHospitalInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('admin_rs_info', JSON.stringify(rsInfo));
-    window.dispatchEvent(new CustomEvent('yasmin_hospital_info_update'));
-    alert('Data Rumah Sakit berhasil disimpan!');
+    try {
+      await saveDocument('rs_info', 'hospital_info', rsInfo);
+      localStorage.setItem('admin_rs_info', JSON.stringify(rsInfo));
+      window.dispatchEvent(new CustomEvent('yasmin_hospital_info_update'));
+      alert('Data Profil Rumah Sakit berhasil disimpan ke Database!');
+    } catch (err: any) {
+      alert(`Gagal menyimpan: ${err.message}`);
+    }
   };
 
   // Image Upload handler
@@ -1518,24 +1775,38 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSaveDoctor = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentDoctor.name) {
-      alert('Nama dokter harus diisi!');
-      return;
-    }
+    const handleSaveDoctor = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!currentDoctor.name) {
+        alert('Nama dokter harus diisi!');
+        return;
+      }
 
-    let updatedList: Doctor[] = [];
-    if (modalType === 'ADD') {
-      updatedList = [...doctors, currentDoctor as Doctor];
-    } else {
-      updatedList = doctors.map(d => d.id === currentDoctor.id ? (currentDoctor as Doctor) : d);
-    }
+      try {
+        const docId = currentDoctor.id || `doc-${Date.now()}`;
+        const doctorToSave = { ...currentDoctor, id: docId };
 
-    onUpdateDoctors(updatedList);
-    setIsModalOpen(false);
-    alert(modalType === 'ADD' ? 'Dokter baru berhasil ditambahkan!' : 'Data dokter berhasil diperbarui!');
-  };
+        // 1. Simpan ke PostgreSQL
+        await saveDocument('doctors', docId, doctorToSave);
+
+        // 2. Update state lokal
+        let updatedList: Doctor[] = [];
+        if (modalType === 'ADD') {
+          updatedList = [...doctors, doctorToSave as Doctor];
+        } else {
+          updatedList = doctors.map(d => d.id === docId ? { ...d, ...doctorToSave } as Doctor : d);
+        }
+
+        onUpdateDoctors(updatedList); // <--- GANTI setDoctors MENJADI onUpdateDoctors
+        localStorage.setItem('admin_doctors_list', JSON.stringify(updatedList));
+        
+        alert('Data dokter berhasil disimpan ke database!');
+        setIsModalOpen(false);
+      } catch (err: any) {
+        console.error(err);
+        alert(`Gagal menyimpan dokter: ${err.message}`);
+      }
+    };
 
   // Poly crud
   const handleOpenAddPoly = () => {
@@ -1560,22 +1831,17 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSavePoly = (e: React.FormEvent) => {
+    const handleSavePoly = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentPoly.name) {
-      alert('Nama polyklinik harus diisi!');
-      return;
-    }
-
-    let updatedList: Polyclinic[] = [];
-    if (modalType === 'ADD') {
-      updatedList = [...polyclinics, currentPoly as Polyclinic];
-    } else {
-      updatedList = polyclinics.map(p => p.code === currentPoly.code ? (currentPoly as Polyclinic) : p);
-    }
-
-    setPolyclinics(updatedList);
-    setIsModalOpen(false);
+    if (!currentPoly.name) return alert('Nama polyklinik harus diisi!');
+    try {
+      const code = currentPoly.code as string;
+      await saveDocument('polyclinics', code, currentPoly);
+      let updatedList = modalType === 'ADD' ? [...polyclinics, currentPoly as Polyclinic] : polyclinics.map(p => p.code === code ? currentPoly as Polyclinic : p);
+      setPolyclinics(updatedList);
+      setIsModalOpen(false);
+      alert('Poliklinik berhasil disimpan!');
+    } catch (err: any) { alert(`Gagal: ${err.message}`); }
   };
 
   // Specialist crud
@@ -1601,22 +1867,133 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
     });
   };
 
-  const handleSaveSpecialist = (e: React.FormEvent) => {
+  const handleSaveSpecialist = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentSpecialist.name) {
-      alert('Nama spesialis harus diisi!');
-      return;
-    }
+    if (!currentSpecialist.name) return alert('Nama spesialis harus diisi!');
+    try {
+      const code = currentSpecialist.code as string;
+      await saveDocument('specialists', code, currentSpecialist);
+      let updatedList = modalType === 'ADD' ? [...specialists, currentSpecialist as Specialist] : specialists.map(s => s.code === code ? currentSpecialist as Specialist : s);
+      setSpecialists(updatedList);
+      setIsModalOpen(false);
+      alert('Spesialis berhasil disimpan!');
+    } catch (err: any) { alert(`Gagal: ${err.message}`); }
+  };
 
-    let updatedList: Specialist[] = [];
-    if (modalType === 'ADD') {
-      updatedList = [...specialists, currentSpecialist as Specialist];
-    } else {
-      updatedList = specialists.map(s => s.code === currentSpecialist.code ? (currentSpecialist as Specialist) : s);
-    }
+  const [specialistCategories, setSpecialistCategories] = useState<any[]>([]);
+  const [currentCategory, setCurrentCategory] = useState<any>({});
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
 
-    setSpecialists(updatedList);
-    setIsModalOpen(false);
+  const loadSpecialistCategories = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/specialist_categories`, { credentials: 'include' });
+      if (res.ok) setSpecialistCategories(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    // Load kategori saat awal buka admin atau saat menu Kategori diklik
+    loadSpecialistCategories();
+  }, [activeMenu]); 
+
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const id = currentCategory.id || crypto.randomUUID();
+      await saveDocument('specialist_categories', id, currentCategory); // saveDocument otomatis mengirim logActivity ke backend
+      alert('Kategori Spesialis berhasil disimpan!');
+      setIsCategoryModalOpen(false);
+      loadSpecialistCategories();
+    } catch (err: any) { alert(err.message); }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    if (!window.confirm('Hapus kategori ini? Pastikan tidak ada dokter yang menggunakannya.')) return;
+    try {
+      await deleteDocument('specialist_categories', id); // deleteDocument otomatis mengirim logActivity
+      loadSpecialistCategories();
+    } catch (err: any) { alert(err.message); }
+  };
+
+  const loadPartners = async () => {
+    try {
+      const res = await fetch(import.meta.env.VITE_BACKEND_URL + '/api/insurance_partners');
+      if (res.ok) setPartners(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'MITRA_PENJAMIN') loadPartners();
+  }, [activeMenu]);
+
+  const handleOpenAddPartner = () => {
+    setCurrentPartner({ id: '', name: '', type: 'Asuransi' });
+    setModalType('ADD'); setIsModalOpen(true);
+  };
+
+  const handleOpenEditPartner = (partner: any) => {
+    setCurrentPartner({ ...partner });
+    setModalType('EDIT'); setIsModalOpen(true);
+  };
+
+  const handleSavePartner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const id = currentPartner.id || crypto.randomUUID();
+      await saveDocument('insurance_partners', id, { ...currentPartner, id });
+      alert('Mitra berhasil disimpan!');
+      setIsModalOpen(false);
+      loadPartners();
+    } catch (err: any) { alert(err.message); }
+  };
+
+  const handleDeletePartner = async (id: string) => {
+    if (!window.confirm('Hapus mitra ini?')) return;
+    try {
+      await deleteDocument('insurance_partners', id);
+      loadPartners();
+    } catch (err: any) { alert(err.message); }
+  };
+
+    const [banks, setBanks] = useState<any[]>([]);
+  const [currentBank, setCurrentBank] = useState<any>({});
+  const [isBankModalOpen, setIsBankModalOpen] = useState(false);
+
+  const loadBanks = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/banks`, { credentials: 'include' });
+      if (res.ok) setBanks(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'METODE_PEMBAYARAN') loadBanks();
+  }, [activeMenu]);
+
+  const handleSaveBank = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const isEdit = !!currentBank.id;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/banks${isEdit ? `/${currentBank.id}` : ''}`, {
+        method: isEdit ? 'PUT' : 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentBank)
+      });
+      if (res.ok) {
+        alert('Data bank berhasil disimpan!');
+        setIsBankModalOpen(false);
+        loadBanks();
+      }
+    } catch (err) { alert('Gagal menyimpan bank.'); }
+  };
+
+  const handleDeleteBank = async (id: string) => {
+    if (!window.confirm('Hapus rekening bank ini?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/banks/${id}`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) loadBanks();
+    } catch (err) { alert('Gagal menghapus bank.'); }
   };
 
   const isSidebarExpanded = !isSidebarCollapsed || isSidebarHovered;
@@ -1949,278 +2326,235 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
               </div>
             )}
             
-            <nav className="space-y-1.5">
+                        <nav className="space-y-1.5">
               
-              <button
-                type="button"
-                id="sidebar-menu-NAMA_RS"
-                onClick={() => selectMenuAndScroll('NAMA_RS')}
-                title="Nama Rumah Sakit"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'NAMA_RS' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Building className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Nama Rumah Sakit</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-DATA_POLY"
-                onClick={() => selectMenuAndScroll('DATA_POLY')}
-                title="Data Poliklinik"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'DATA_POLY' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <ClipboardList className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Data Poliklinik</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-DATA_SPESIALIS"
-                onClick={() => selectMenuAndScroll('DATA_SPESIALIS')}
-                title="Data Spesialis"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'DATA_SPESIALIS' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Award className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Data Spesialis</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-DATA_DOKTER"
-                onClick={() => selectMenuAndScroll('DATA_DOKTER')}
-                title="Data Dokter"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'DATA_DOKTER' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Users className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Data Dokter</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-DATA_PRAKTEK"
-                onClick={() => selectMenuAndScroll('DATA_PRAKTEK')}
-                title="Data Praktek Dokter"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'DATA_PRAKTEK' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Calendar className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Data Praktek Dokter</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-SOSIAL_MEDIA"
-                onClick={() => selectMenuAndScroll('SOSIAL_MEDIA')}
-                title="Sosial Media"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'SOSIAL_MEDIA' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Share2 className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Sosial Media</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-FEED_SOSMED"
-                onClick={() => selectMenuAndScroll('FEED_SOSMED')}
-                title="Kelola Postingan"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'FEED_SOSMED' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Layers className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Kelola Postingan Web</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-BERITA"
-                onClick={() => selectMenuAndScroll('BERITA')}
-                title="Berita & Pengumuman"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'BERITA' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Megaphone className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Berita & Pengumuman</span>}
-              </button>
-
-              <button
-                type="button"
-                id="sidebar-menu-ULASAN_GOOGLE"
-                onClick={() => selectMenuAndScroll('ULASAN_GOOGLE')}
-                title="Ulasan Google Maps"
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'ULASAN_GOOGLE' 
-                    ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' 
-                    : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
-                }`}
-              >
-                <Star className="h-5 w-5 shrink-0 text-amber-300 fill-current" />
-                {isSidebarExpanded && <span className="truncate">Ulasan Google Maps</span>}
-              </button>
-
-              {/* MENU ARTIKEL (Bisa diakses semua Admin) */}
-              <button
-                type="button"
-                onClick={() => selectMenuAndScroll('ARTIKEL')}
-                className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                  activeMenu === 'ARTIKEL' ? 'bg-warm-orange text-headings font-bold shadow-md' : 'text-teal-100 hover:bg-teal-900/50'
-                }`}
-              >
-                <Newspaper className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && <span className="truncate">Kelola Artikel / Blog</span>}
-              </button>
-
-              {/* KHUSUS MASTER & SUPERUSER: RBAC & LISENSI */}
-              {(adminSession.role === 'Master' || adminSession.role === 'SuperUser') && (
-                <div className="pt-4 mt-2 border-t border-teal-800 space-y-1.5">
-                  <div className="text-[9px] font-bold text-teal-400 uppercase tracking-widest px-3 font-mono mb-2">Keamanan Sistem</div>
+              {/* 1. GRUP MASTER DATA (Poli, Dokter, Kamar) */}
+              {hasAccess('MENU_MASTER_DATA') && (
+                <>
                   <button
                     type="button"
-                    onClick={() => selectMenuAndScroll('MANAJEMEN_USER')}
+                    onClick={() => selectMenuAndScroll('NAMA_RS')}
                     className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                      activeMenu === 'MANAJEMEN_USER' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                      activeMenu === 'NAMA_RS' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
                     }`}
                   >
-                    <ShieldAlert className="h-5 w-5 shrink-0" />
-                    {isSidebarExpanded && <span className="truncate">Hak Akses (RBAC)</span>}
+                    <Building className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Identitas</span>}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => selectMenuAndScroll('LISENSI_PERANGKAT')}
+                    onClick={() => selectMenuAndScroll('DATA_POLY')}
                     className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
-                      activeMenu === 'LISENSI_PERANGKAT' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                      activeMenu === 'DATA_POLY' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
                     }`}
                   >
-                    <MonitorSmartphone className="h-5 w-5 shrink-0" />
-                    {isSidebarExpanded && <span className="truncate">Lisensi Perangkat</span>}
+                    <ClipboardList className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Data Poliklinik</span>}
                   </button>
-                </div>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('DATA_SPESIALIS')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'DATA_SPESIALIS' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Award className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Data Spesialis</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('KATEGORI_SPESIALIS')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'KATEGORI_SPESIALIS' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50'
+                    }`}
+                  >
+                    <Layers className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Kategori Spesialis</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('DATA_DOKTER')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'DATA_DOKTER' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Users className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Data Dokter</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('DATA_PRAKTEK')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'DATA_PRAKTEK' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Calendar className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Data Praktek Dokter</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('MITRA_PENJAMIN')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'MITRA_PENJAMIN' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <ShieldCheck className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Mitra Penjamin</span>}
+                  </button>
+
+                                    <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('METODE_PEMBAYARAN')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'METODE_PEMBAYARAN' ? 'bg-warm-orange text-headings shadow-md font-bold' : 'text-teal-100 hover:bg-teal-900/50'
+                    }`}
+                  >
+                    <CreditCard className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Metode Pembayaran</span>}
+                  </button>
+
+                  {/* Collapsible Kamar Rawat */}
+                  <div className="space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !isKamarSidebarExpanded;
+                        setIsKamarSidebarExpanded(nextVal);
+                        if (nextVal) setIsKpiSidebarExpanded(false);
+                      }}
+                      className={`w-full flex items-center justify-between ${isSidebarExpanded ? 'px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all ${
+                        activeMenu.startsWith('KAMAR_') || isKamarSidebarExpanded ? 'text-white font-bold bg-teal-900/40' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Bed className="h-5 w-5 shrink-0" />
+                        {isSidebarExpanded && <span className="truncate">Kamar Rawat</span>}
+                      </div>
+                      {isSidebarExpanded && (isKamarSidebarExpanded ? <ChevronDown className="h-4 w-4 text-teal-300" /> : <ChevronRight className="h-4 w-4 text-teal-300" />)}
+                    </button>
+                    
+                    {isKamarSidebarExpanded && isSidebarExpanded && (
+                      <div className="pl-4 space-y-1 border-l border-teal-800 ml-6 py-1">
+                        <button onClick={() => selectMenuAndScroll('KAMAR_RAWAT_INAP')} className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${activeMenu === 'KAMAR_RAWAT_INAP' ? 'bg-warm-orange text-headings shadow-xs font-bold' : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'}`}>
+                          <BedDouble className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_RAWAT_INAP' ? 'text-headings' : 'text-teal-300'}`} />
+                          <span>Rawat Inap</span>
+                        </button>
+                        <button onClick={() => selectMenuAndScroll('KAMAR_ICU')} className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${activeMenu === 'KAMAR_ICU' ? 'bg-warm-orange text-headings shadow-xs font-bold' : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'}`}>
+                          <HeartPulse className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_ICU' ? 'text-headings' : 'text-indigo-300'}`} />
+                          <span>ICU</span>
+                        </button>
+                        <button onClick={() => selectMenuAndScroll('KAMAR_IGD')} className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${activeMenu === 'KAMAR_IGD' ? 'bg-warm-orange text-headings shadow-xs font-bold' : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'}`}>
+                          <Siren className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_IGD' ? 'text-headings' : 'text-rose-300'}`} />
+                          <span>IGD</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
 
-              {/* COLLAPSIBLE KAMAR RAWAT SIDEBAR MENU */}
-              <div className="space-y-1">
+              {/* 2. GRUP KONTEN WEB (Artikel, Sosmed, Berita) */}
+              {hasAccess('MENU_CONTENT') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('SOSIAL_MEDIA')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'SOSIAL_MEDIA' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Share2 className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Sosial Media</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('FEED_SOSMED')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'FEED_SOSMED' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Layers className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Kelola Postingan Web</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('BERITA')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'BERITA' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Megaphone className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Berita & Pengumuman</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('ARTIKEL')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'ARTIKEL' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                    }`}
+                  >
+                    <Newspaper className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Kelola Artikel / Blog</span>}
+                  </button>
+                </>
+              )}
+
+              {/* 3. MENU ULASAN GOOGLE */}
+              {hasAccess('MENU_REVIEWS') && (
                 <button
                   type="button"
-                  id="sidebar-menu-KAMAR"
-                  onClick={() => {
-                    const nextVal = !isKamarSidebarExpanded;
-                    setIsKamarSidebarExpanded(nextVal);
-                    if (nextVal) {
-                      setIsKpiSidebarExpanded(false);
-                    }
-                  }}
-                  title="Kamar Rawat"
-                  className={`w-full flex items-center justify-between ${isSidebarExpanded ? 'px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all ${
-                    activeMenu.startsWith('KAMAR_') || isKamarSidebarExpanded
-                      ? 'text-white font-bold bg-teal-900/40'
-                      : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                  onClick={() => selectMenuAndScroll('ULASAN_GOOGLE')}
+                  className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                    activeMenu === 'ULASAN_GOOGLE' ? 'bg-warm-orange text-headings shadow-md scale-[1.02] font-bold' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
                   }`}
                 >
-                  <div className="flex items-center space-x-3">
-                    <Bed className="h-5 w-5 shrink-0" />
-                    {isSidebarExpanded && <span className="truncate">Kamar Rawat</span>}
-                  </div>
-                  {isSidebarExpanded && (
-                    isKamarSidebarExpanded ? <ChevronDown className="h-4 w-4 text-teal-300" /> : <ChevronRight className="h-4 w-4 text-teal-300" />
-                  )}
+                  <Star className="h-5 w-5 shrink-0 text-amber-300 fill-current" />
+                  {isSidebarExpanded && <span className="truncate">Ulasan Google Maps</span>}
                 </button>
-                
-                {isKamarSidebarExpanded && isSidebarExpanded && (
-                  <div className="pl-4 space-y-1 border-l border-teal-800 ml-6 py-1">
-                    <button
-                      type="button"
-                      onClick={() => selectMenuAndScroll('KAMAR_RAWAT_INAP')}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${
-                        activeMenu === 'KAMAR_RAWAT_INAP'
-                          ? 'bg-warm-orange text-headings shadow-xs font-bold'
-                          : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'
-                      }`}
-                    >
-                      <BedDouble className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_RAWAT_INAP' ? 'text-headings' : 'text-teal-300'}`} />
-                      <span>Rawat Inap</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => selectMenuAndScroll('KAMAR_ICU')}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${
-                        activeMenu === 'KAMAR_ICU'
-                          ? 'bg-warm-orange text-headings shadow-xs font-bold'
-                          : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'
-                      }`}
-                    >
-                      <HeartPulse className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_ICU' ? 'text-headings' : 'text-indigo-300'}`} />
-                      <span>ICU</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => selectMenuAndScroll('KAMAR_IGD')}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${
-                        activeMenu === 'KAMAR_IGD'
-                          ? 'bg-warm-orange text-headings shadow-xs font-bold'
-                          : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'
-                      }`}
-                    >
-                      <Siren className={`h-4 w-4 shrink-0 ${activeMenu === 'KAMAR_IGD' ? 'text-headings' : 'text-rose-300'}`} />
-                      <span>IGD</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
 
-              {/* KHUSUS MASTER & SUPERUSER: MENU KPI */}
-              {(adminSession.role === 'Master' || adminSession.role === 'SuperUser') && (
+              {/* 4. MENU LAPORAN PASIEN (MENGGUNAKAN HASACCESS) */}
+              {hasAccess('MENU_PATIENT_FEEDBACK') && (
+                <button
+                  type="button"
+                  onClick={() => selectMenuAndScroll('LAPORAN_PASIEN')}
+                  className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                    activeMenu === 'LAPORAN_PASIEN' ? 'bg-warm-orange text-headings font-bold shadow-md' : 'text-teal-100 hover:bg-teal-900/50'
+                  }`}
+                >
+                  <MessageCircle className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && <span className="truncate">Laporan Pasien</span>}
+                </button>
+              )}
+
+              {/* 5. MENU KPI (MENGGUNAKAN HASACCESS) */}
+              {hasAccess('MENU_KPI') && (
                 <div className="space-y-1">
                   <button
                     type="button"
-                    id="sidebar-menu-KPI"
                     onClick={() => {
                       const nextVal = !isKpiSidebarExpanded;
                       setIsKpiSidebarExpanded(nextVal);
                       if (nextVal) setIsKamarSidebarExpanded(false);
                     }}
-                    title="KPI & Kinerja"
                     className={`w-full flex items-center justify-between ${isSidebarExpanded ? 'px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all ${
-                      activeMenu.startsWith('KPI_') || isKpiSidebarExpanded
-                        ? 'text-white font-bold bg-teal-900/40'
-                        : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
+                      activeMenu.startsWith('KPI_') || isKpiSidebarExpanded ? 'text-white font-bold bg-teal-900/40' : 'text-teal-100 hover:bg-teal-900/50 hover:text-white font-normal'
                     }`}
                   >
                     <div className="flex items-center space-x-3">
                       <TrendingUp className="h-5 w-5 shrink-0" />
                       {isSidebarExpanded && <span className="truncate">Menu KPI</span>}
                     </div>
-                    {isSidebarExpanded && (
-                      isKpiSidebarExpanded ? <ChevronDown className="h-4 w-4 text-teal-300" /> : <ChevronRight className="h-4 w-4 text-teal-300" />
-                    )}
+                    {isSidebarExpanded && (isKpiSidebarExpanded ? <ChevronDown className="h-4 w-4 text-teal-300" /> : <ChevronRight className="h-4 w-4 text-teal-300" />)}
                   </button>
                   
                   {isKpiSidebarExpanded && isSidebarExpanded && (
@@ -2255,9 +2589,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                           type="button"
                           onClick={() => selectMenuAndScroll(sub.id as any)}
                           className={`w-full text-left px-3 py-2 rounded-lg text-xs tracking-wide transition-all flex items-center space-x-2.5 ${
-                            isActive
-                              ? 'bg-warm-orange text-headings shadow-xs font-bold'
-                              : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'
+                            isActive ? 'bg-warm-orange text-headings shadow-xs font-bold' : 'text-teal-100 hover:bg-teal-900/30 hover:text-white font-normal'
                           }`}
                         >
                           <SubIcon className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-headings' : sub.iconColor}`} />
@@ -2269,6 +2601,71 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                 )}
               </div>
               )}
+
+              {/* 6. KHUSUS MASTER & SUPERUSER: RBAC & LISENSI */}
+              {(adminSession.role === 'Master' || adminSession.role === 'SuperUser') && (
+                <div className="pt-4 mt-2 border-t border-teal-800 space-y-1.5">
+                  <div className="text-[9px] font-bold text-teal-400 uppercase tracking-widest px-3 font-mono mb-2">Keamanan Sistem</div>
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('MANAJEMEN_USER')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'MANAJEMEN_USER' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                    }`}
+                  >
+                    <ShieldAlert className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Hak Akses (RBAC)</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('LISENSI_PERANGKAT')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'LISENSI_PERANGKAT' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                    }`}
+                  >
+                    <MonitorSmartphone className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Lisensi Perangkat</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('PENGATURAN_SISTEM')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'PENGATURAN_SISTEM' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                    }`}
+                  >
+                    <KeyRound className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Pengaturan API</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectMenuAndScroll('AUDIT_LOG')}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer ${
+                      activeMenu === 'AUDIT_LOG' ? 'bg-rose-600 text-white font-bold shadow-md' : 'text-rose-200 hover:bg-rose-900/50'
+                    }`}
+                  >
+                    <Activity className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Audit Log</span>}
+                  </button>
+                </div>
+              )}
+
+              {/* 7. TOMBOL PINTAS LOKET (Khusus Admin Pendaftaran) */}
+              {hasAccess('MENU_PENDAFTARAN') && (
+                <div className="pt-4 mt-2 border-t border-teal-800">
+                  <button
+                    type="button"
+                    onClick={() => window.location.href = '/admin/pendaftaran'}
+                    className={`w-full flex items-center ${isSidebarExpanded ? 'space-x-3 px-4 py-3' : 'justify-center p-3'} rounded-xl text-sm tracking-wide transition-all cursor-pointer bg-emerald-600 text-white font-bold shadow-md hover:bg-emerald-700`}
+                  >
+                    <Users className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && <span className="truncate">Buka Layar Loket</span>}
+                  </button>
+                </div>
+              )}
+
             </nav>
           </div>
 
@@ -2279,7 +2676,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
           <button
             type="button"
             onClick={() => selectMenuAndScroll('NAMA_RS')}
-            title="Nama Rumah Sakit"
+            title="Identitas"
             className={`p-2 rounded-lg hover:bg-teal-900 hover:text-white transition-all cursor-pointer shrink-0 relative ${
               activeMenu === 'NAMA_RS' ? 'bg-teal-900 text-warm-orange' : ''
             }`}
@@ -2380,7 +2777,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </button>
             <div>
               <h2 className="font-display font-bold text-xl text-headings tracking-tight">
-                {activeMenu === 'NAMA_RS' && 'Pengaturan Master Nama Rumah Sakit'}
+                {activeMenu === 'NAMA_RS' && 'Pengaturan Master Identitas'}
                 {activeMenu === 'DATA_POLY' && 'Master Data Poliklinik'}
                 {activeMenu === 'DATA_SPESIALIS' && 'Master Data Spesialisasi'}
                 {activeMenu === 'DATA_DOKTER' && 'Master Data Dokter'}
@@ -2636,7 +3033,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
               doctors={doctors}
             />
           </div>
-        )}
+          )}
 
           {/* 2. DATA POLYKLINIK */}
           {activeMenu === 'DATA_POLY' && (
@@ -2853,6 +3250,42 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                   </>
                 );
               })()}
+            </div>
+          )}
+
+          {activeMenu === 'KATEGORI_SPESIALIS' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden animate-fade-in">
+              <div className="p-6 border-b border-divider flex justify-between items-center bg-teal-50/20">
+                <div>
+                  <h3 className="font-display font-bold text-headings text-base">Master Kategori Spesialis</h3>
+                  <p className="text-xs text-body-text">Kategori ini akan muncul di pilihan form Dokter dan filter website.</p>
+                </div>
+                <button 
+                  onClick={() => { setCurrentCategory({ id: '', name: '' }); setIsCategoryModalOpen(true); }}
+                  className="px-4 py-2 bg-yasmin-green text-white rounded-xl text-sm font-bold flex items-center space-x-2 cursor-pointer"
+                >
+                  <Plus className="h-4 w-4" /> <span>Tambah Kategori</span>
+                </button>
+              </div>
+              <table className="w-full text-left text-sm">
+                <thead className="bg-soft-mint border-b border-divider text-xs text-body-text uppercase">
+                  <tr>
+                    <th className="px-6 py-4">Nama Kategori Spesialis</th>
+                    <th className="px-6 py-4 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-divider">
+                  {specialistCategories.map(cat => (
+                    <tr key={cat.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4 font-bold text-headings">{cat.name}</td>
+                      <td className="px-6 py-4 text-right space-x-2">
+                        <button onClick={() => { setCurrentCategory(cat); setIsCategoryModalOpen(true); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit2 className="h-4 w-4" /></button>
+                        <button onClick={() => handleDeleteCategory(cat.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 className="h-4 w-4" /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -3268,7 +3701,93 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* 5. MASTER SOSIAL MEDIA */}
+          {/* 6. MITRA PENJAMIN */}
+          {activeMenu === 'MITRA_PENJAMIN' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-divider flex justify-between items-center bg-teal-50/20">
+                <div>
+                  <h3 className="font-display font-bold text-headings text-base">Master Mitra Penjamin</h3>
+                  <p className="text-xs text-body-text">Kelola daftar Asuransi Swasta dan Perusahaan Rekanan.</p>
+                </div>
+                <button onClick={handleOpenAddPartner} className="px-4 py-2 bg-yasmin-green text-white rounded-xl text-sm font-bold flex items-center space-x-2">
+                  <Plus className="h-4.5 w-4.5" /> <span>Tambah Mitra</span>
+                </button>
+              </div>
+              <table className="w-full text-left">
+                <thead className="bg-soft-mint border-b border-divider text-xs text-body-text uppercase">
+                  <tr>
+                    <th className="px-4 py-3">Nama Mitra</th>
+                    <th className="px-4 py-3">Kategori</th>
+                    <th className="px-4 py-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-divider text-sm">
+                  {partners.map((p, idx) => (
+                    <tr key={p.id} className="hover:bg-soft-mint/50">
+                      <td className="px-4 py-3 font-semibold">{p.name}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${p.type === 'Asuransi' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
+                          {p.type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right space-x-2">
+                        <button onClick={() => handleOpenEditPartner(p)} className="p-1 text-deep-teal hover:bg-warm-ivory rounded"><Edit2 className="h-4 w-4" /></button>
+                        <button onClick={() => handleDeletePartner(p.id)} className="p-1 text-rose-600 hover:bg-warm-ivory rounded"><Trash2 className="h-4 w-4" /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeMenu === 'METODE_PEMBAYARAN' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden animate-fade-in">
+              <div className="p-6 border-b border-divider flex justify-between items-center bg-teal-50/20">
+                <div>
+                  <h3 className="font-display font-bold text-headings text-base">Rekening Bank Resmi</h3>
+                  <p className="text-xs text-body-text">Daftar rekening yang akan tampil di halaman pembayaran pasien.</p>
+                </div>
+                <button 
+                  onClick={() => { setCurrentBank({ bankName: '', accountNumber: '', accountHolder: '', isActive: true }); setIsBankModalOpen(true); }}
+                  className="px-4 py-2 bg-yasmin-green text-white rounded-xl text-sm font-bold flex items-center space-x-2 cursor-pointer"
+                >
+                  <Plus className="h-4 w-4" /> <span>Tambah Bank</span>
+                </button>
+              </div>
+              <table className="w-full text-left">
+                <thead className="bg-soft-mint border-b border-divider text-xs text-body-text uppercase">
+                  <tr>
+                    <th className="px-6 py-4">Nama Bank</th>
+                    <th className="px-6 py-4">Nomor Rekening</th>
+                    <th className="px-6 py-4">Atas Nama</th>
+                    <th className="px-6 py-4 text-center">Status</th>
+                    <th className="px-6 py-4 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-divider text-sm">
+                  {banks.map(bank => (
+                    <tr key={bank.id} className="hover:bg-slate-50">
+                      <td className="px-6 py-4 font-bold text-headings">{bank.bankName}</td>
+                      <td className="px-6 py-4 font-mono font-bold text-yasmin-green">{bank.accountNumber}</td>
+                      <td className="px-6 py-4 text-gray-600">{bank.accountHolder}</td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${bank.isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                          {bank.isActive ? 'AKTIF' : 'NONAKTIF'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right space-x-2">
+                        <button onClick={() => { setCurrentBank(bank); setIsBankModalOpen(true); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit2 className="h-4 w-4" /></button>
+                        <button onClick={() => handleDeleteBank(bank.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 className="h-4 w-4" /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 7. MASTER SOSIAL MEDIA */}
           {activeMenu === 'SOSIAL_MEDIA' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
               <div className="p-6 border-b border-divider flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -3374,7 +3893,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
           )}
 
           {/* ========================================== */}
-          {/* MENU KELOLA FEED POSTINGAN KE WEBSITE */}
+          {/* 8. FEED POSTINGAN KE WEBSITE */}
           {/* ========================================== */}
           {activeMenu === 'FEED_SOSMED' && (
             <div className="space-y-6 animate-fade-in">
@@ -3539,7 +4058,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* 6. MASTER BERITA & PENGUMUMAN */}
+          {/* 9. MASTER BERITA & PENGUMUMAN */}
           {activeMenu === 'BERITA' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
               <div className="p-6 border-b border-divider flex flex-col md:flex-row md:items-center justify-between gap-4 bg-amber-50/40">
@@ -3668,7 +4187,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* MASTER & KURASI ULASAN GOOGLE MAPS */}
+          {/* 10. MASTER & KURASI ULASAN GOOGLE MAPS */}
           {activeMenu === 'ULASAN_GOOGLE' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden animate-fade-in space-y-6 p-6">
               
@@ -3720,6 +4239,49 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
               {/* Tabel Kurasi Ulasan */}
               <div className="border border-divider rounded-xl overflow-hidden">
                 <div className="overflow-x-auto max-h-[550px] overflow-y-auto">
+                  {/* BARIS FILTER ULASAN */}
+                  <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-xl border border-divider shadow-sm mb-4">
+                    <div className="flex items-center space-x-2">
+                      <label className="text-xs font-bold text-gray-500">Tampilkan:</label>
+                      <select 
+                        value={filterLimit} 
+                        onChange={(e) => setFilterLimit(e.target.value)}
+                        className="p-2 border border-divider rounded-lg text-xs font-bold focus:ring-2 focus:ring-yasmin-green cursor-pointer"
+                      >
+                        <option value="5">5 Ulasan</option>
+                        <option value="10">10 Ulasan</option>
+                        <option value="15">15 Ulasan</option>
+                        <option value="100">Semua Ulasan</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <label className="text-xs font-bold text-gray-500">Waktu:</label>
+                      <select 
+                        value={filterDatePreset} 
+                        onChange={(e) => setFilterDatePreset(e.target.value)}
+                        className="p-2 border border-divider rounded-lg text-xs font-bold focus:ring-2 focus:ring-yasmin-green cursor-pointer"
+                      >
+                        <option value="all">Semua Waktu</option>
+                        <option value="1_month">1 Bulan Terakhir</option>
+                        <option value="3_months">3 Bulan Terakhir</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <label className="text-xs font-bold text-gray-500">Bintang:</label>
+                      <select 
+                        value={filterRating} 
+                        onChange={(e) => setFilterRating(e.target.value)}
+                        className="p-2 border border-divider rounded-lg text-xs font-bold focus:ring-2 focus:ring-yasmin-green cursor-pointer"
+                      >
+                        <option value="">Semua Bintang</option>
+                        <option value="5">Hanya 5 Bintang</option>
+                        <option value="4">Hanya 4 Bintang</option>
+                        <option value="3">Hanya 3 Bintang</option>
+                      </select>
+                    </div>
+                  </div>
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="bg-soft-mint border-b border-divider text-body-text font-bold uppercase tracking-wider font-mono">
@@ -3740,7 +4302,12 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                           <td className="py-3 px-4 font-semibold text-headings">
                             <div className="flex items-center space-x-2.5">
                               {rev.authorPhoto ? (
-                                <img src={rev.authorPhoto} alt={rev.authorName} className="w-8 h-8 rounded-full object-cover border" />
+                                <img 
+                                  src={rev.authorPhoto} 
+                                  alt={rev.authorName} 
+                                  referrerPolicy="no-referrer" // 👈 TAMBAHKAN INI
+                                  className="w-8 h-8 rounded-full object-cover border" 
+                                />
                               ) : (
                                 <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center font-bold text-[10px] text-body-text">
                                   {rev.authorName.slice(0, 2).toUpperCase()}
@@ -3794,8 +4361,110 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
+                    {activeMenu === 'LAPORAN_PASIEN' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden animate-fade-in">
+              <div className="p-6 border-b border-divider flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-teal-50/40">
+                <div>
+                  <h5 className="font-display font-bold text-headings text-base flex items-center space-x-2">
+                    <MessageCircle className="h-5 w-5 text-yasmin-green" />
+                    <span>Kotak Masuk Saran & Pengaduan</span>
+                  </h5>
+                  <p className="text-xs text-body-text mt-1">Pantau dan tindak lanjuti laporan dari pasien.</p>
+                </div>
+                
+                {/* FITUR PENCARIAN & FILTER BARU */}
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                  <div className="relative flex-1 md:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Cari ID Pasien / Pesan..." 
+                      value={searchFeedback}
+                      onChange={(e) => setSearchFeedback(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-yasmin-green outline-none bg-white"
+                    />
+                  </div>
+                  <select 
+                    value={filterFeedbackStatus}
+                    onChange={(e) => setFilterFeedbackStatus(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-xl text-xs font-bold bg-white cursor-pointer outline-none focus:ring-2 focus:ring-yasmin-green"
+                  >
+                    <option value="all">Semua Status</option>
+                    <option value="unread">Baru (Belum Dibaca)</option>
+                    <option value="read">Sedang Ditinjau</option>
+                    <option value="resolved">Selesai</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-soft-mint border-b border-divider text-xs font-bold text-body-text uppercase tracking-wider">
+                      <th className="px-6 py-4">Waktu Masuk</th>
+                      <th className="px-6 py-4">ID Pasien</th>
+                      <th className="px-6 py-4">Kesan Umum</th>
+                      <th className="px-6 py-4">Status</th>
+                      <th className="px-6 py-4 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-divider">
+                    {(() => {
+                      // Logika Filter Laporan
+                      let filtered = feedbacks;
+                      if (filterFeedbackStatus !== 'all') {
+                        filtered = filtered.filter(f => f.status === filterFeedbackStatus);
+                      }
+                      if (searchFeedback.trim()) {
+                        const q = searchFeedback.toLowerCase();
+                        filtered = filtered.filter(f => 
+                          f.patientId.toLowerCase().includes(q) || 
+                          JSON.stringify(f.messages).toLowerCase().includes(q)
+                        );
+                      }
+
+                      if (filtered.length === 0) {
+                        return <tr><td colSpan={5} className="px-6 py-10 text-center text-gray-400 text-xs">Tidak ada laporan yang cocok dengan filter.</td></tr>;
+                      }
+
+                      return filtered.map(fb => (
+                        <tr key={fb.id} className={`transition-colors hover:bg-slate-50 ${fb.status === 'unread' ? 'bg-emerald-50/20' : ''}`}>
+                          <td className="px-6 py-4 text-xs font-mono text-gray-500">
+                            {new Date(fb.createdAt).toLocaleString('id-ID')}
+                          </td>
+                          <td className="px-6 py-4 font-bold text-headings">{fb.patientId}</td>
+                          <td className="px-6 py-4 text-xs font-semibold text-gray-700">{fb.kesan}</td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase ${
+                              fb.status === 'unread' ? 'bg-rose-100 text-rose-700 border border-rose-200' :
+                              fb.status === 'read' ? 'bg-amber-100 text-amber-700 border border-amber-200' :
+                              'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                            }`}>
+                              {fb.status === 'unread' ? 'Baru (Belum Dibaca)' : fb.status === 'read' ? 'Sedang Ditinjau' : 'Selesai'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button 
+                              onClick={() => {
+                                setSelectedFeedback(fb);
+                                if (fb.status === 'unread') handleUpdateFeedbackStatus(fb.id, 'read');
+                              }} 
+                              className="px-4 py-2 bg-[#0B4F4A] text-white rounded-xl text-xs font-bold hover:bg-[#0E625C] transition-colors"
+                            >
+                              Buka Laporan
+                            </button>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* ========================================== */}
-          {/* MENU 1: KELOLA ARTIKEL & BLOG KESEHATAN */}
+          {/* 11. KELOLA ARTIKEL & BLOG KESEHATAN */}
           {/* ========================================== */}
           {activeMenu === 'ARTIKEL' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 animate-fade-in text-left">
@@ -3858,7 +4527,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                 <div className="flex justify-end pt-2 border-t border-divider mt-2">
                   <button type="submit" className="px-6 py-2.5 bg-yasmin-green hover:bg-deep-teal text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-2 mt-3">
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Terbitkan Artikel</span>
+                    <span>{editingArticleId ? 'Simpan Perubahan' : 'Terbitkan Artikel'}</span>
                   </button>
                 </div>
               </form>
@@ -3873,6 +4542,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                       <th className="px-4 py-3">Kategori & Penulis</th>
                       <th className="px-4 py-3">Tanggal Terbit</th>
                       <th className="px-4 py-3 text-center">Status Tayang</th>
+                      <th className="px-4 py-3 text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-divider">
@@ -3894,6 +4564,18 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                             {a.isPublished ? '✓ PUBLISH' : '✕ DRAFT'}
                           </button>
                         </td>
+                        <td className="px-4 py-3 text-right space-x-2">
+                          <button onClick={() => {
+                            setNewArticle({ title: a.title, content: a.content, category: a.category, coverImage: a.coverImage });
+                            setEditingArticleId(a.id);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }} className="text-indigo-600 hover:bg-indigo-50 p-1.5 rounded-lg transition-colors">
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button onClick={() => handleDeleteArticle(a.id)} className="text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                     {articles.length === 0 && (
@@ -3908,7 +4590,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
           )}
 
           {/* ========================================================== */}
-          {/* MENU 2: MANAJEMEN USER (RBAC) - HANYA MASTER/SUPERUSER */}
+          {/* 12. MANAJEMEN USER (RBAC) - HANYA MASTER/SUPERUSER */}
           {/* ========================================================== */}
           {activeMenu === 'MANAJEMEN_USER' && (adminSession?.role === 'Master' || adminSession?.role === 'SuperUser') && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 animate-fade-in text-left">
@@ -3928,11 +4610,11 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                   </div>
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-body-text uppercase tracking-wider font-mono">Email Login</label>
-                    <input type="email" required value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full px-4 py-2.5 border border-divider rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none" placeholder="siti.loket@rsyasmin.id" />
+                    <input type="email" required disabled={!!editingUserId} value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full px-4 py-2.5 border border-divider rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none disabled:bg-gray-100 disabled:text-gray-500" placeholder="siti.loket@rsyasmin.id" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-body-text uppercase tracking-wider font-mono">Kata Sandi</label>
-                    <input type="text" required value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full px-4 py-2.5 border border-divider rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none" placeholder="Minimal 6 karakter" />
+                    <label className="text-[11px] font-bold text-body-text uppercase tracking-wider font-mono">Kata Sandi {editingUserId && <span className="text-emerald-500">(Kosongkan jika tidak diubah)</span>}</label>
+                    <input type="password" required={!editingUserId} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full px-4 py-2.5 border border-divider rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none" placeholder="Minimal 12 karakter" />
                   </div>
                   <div className="space-y-1 md:col-span-3">
                     <label className="text-[11px] font-bold text-body-text uppercase tracking-wider font-mono">Peran (Role) Sistem & Keamanan</label>
@@ -3943,11 +4625,100 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                       )}
                     </select>
                   </div>
+                  <div className="space-y-3 md:col-span-3 border-t border-rose-100 pt-4 mt-2">
+                    <label className="text-[11px] font-bold text-body-text uppercase tracking-wider font-mono block">Hak Akses Spesifik (Permissions)</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                      
+                      {/* Grup 1: Pendaftaran */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_PENDAFTARAN')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_PENDAFTARAN'] : newUser.permissions.filter(p => p !== 'MENU_PENDAFTARAN');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Loket Pendaftaran</span>
+                      </label>
+
+                      {/* Grup 2: Laporan & Ulasan */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_PATIENT_FEEDBACK')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_PATIENT_FEEDBACK'] : newUser.permissions.filter(p => p !== 'MENU_PATIENT_FEEDBACK');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Laporan Saran Pasien</span>
+                      </label>
+
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_REVIEWS')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_REVIEWS'] : newUser.permissions.filter(p => p !== 'MENU_REVIEWS');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Kurasi Ulasan Google</span>
+                      </label>
+
+                      {/* Grup 3: Konten & Web */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_CONTENT')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_CONTENT'] : newUser.permissions.filter(p => p !== 'MENU_CONTENT');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Kelola Web & Artikel</span>
+                      </label>
+
+                      {/* Grup 4: Master Data */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_MASTER_DATA')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_MASTER_DATA'] : newUser.permissions.filter(p => p !== 'MENU_MASTER_DATA');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Master Data (Dokter/Poli)</span>
+                      </label>
+
+                      {/* Grup 5: KPI */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_KPI')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_KPI'] : newUser.permissions.filter(p => p !== 'MENU_KPI');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Dashboard KPI</span>
+                      </label>
+
+                      {/* Grup 6: Keamanan Sistem */}
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_RBAC')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_RBAC'] : newUser.permissions.filter(p => p !== 'MENU_RBAC');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Hak Akses (RBAC)</span>
+                      </label>
+
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_DEVICE_LICENSE')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_DEVICE_LICENSE'] : newUser.permissions.filter(p => p !== 'MENU_DEVICE_LICENSE');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Lisensi Perangkat</span>
+                      </label>
+
+                      <label className="flex items-center space-x-2 cursor-pointer group">
+                        <input type="checkbox" checked={newUser.permissions.includes('MENU_API_SETTINGS')} onChange={(e) => {
+                          const perms = e.target.checked ? [...newUser.permissions, 'MENU_API_SETTINGS'] : newUser.permissions.filter(p => p !== 'MENU_API_SETTINGS');
+                          setNewUser({...newUser, permissions: perms});
+                        }} className="w-4 h-4 rounded border-gray-300 text-rose-600 focus:ring-rose-500" />
+                        <span className="text-xs font-bold text-gray-700 group-hover:text-rose-600">Pengaturan API</span>
+                      </label>
+
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-end pt-3">
+                <div className="flex justify-end pt-3 gap-2">
+                  {editingUserId && (
+                    <button type="button" onClick={handleCancelEdit} className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer">
+                      Batal Edit
+                    </button>
+                  )}
                   <button type="submit" className="px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-md transition-all cursor-pointer active:scale-95 flex items-center gap-1.5">
                     <UserPlus className="h-4 w-4" />
-                    <span>Buat Akun Pegawai</span>
+                    <span>{editingUserId ? 'Simpan Perubahan' : 'Buat Akun Pegawai'}</span>
                   </button>
                 </div>
               </form>
@@ -3960,6 +4731,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                       <th className="px-5 py-4">Email Login</th>
                       <th className="px-5 py-4 text-center">Peran (Role)</th>
                       <th className="px-5 py-4">Tanggal Dibuat</th>
+                      <th className="px-5 py-4 text-center">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-divider">
@@ -3980,6 +4752,19 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                           </span>
                         </td>
                         <td className="px-5 py-4 text-body-text font-mono">{new Date(u.createdAt).toLocaleDateString('id-ID')}</td>
+                        <td className="px-5 py-4 text-center space-x-2">
+                          {/* Tombol Edit */}
+                          <button onClick={() => handleOpenEditUser(u)} className="text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg transition-colors inline-flex">
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+
+                          {/* Tombol Hapus */}
+                          {u.email !== adminSession?.email && (
+                            <button onClick={() => handleDeleteUser(u.id, u.email)} className="text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors inline-flex">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -3989,7 +4774,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
           )}
 
           {/* ========================================================== */}
-          {/* MENU 3: LISENSI PERANGKAT (DEVICE LOCK) */}
+          {/* 13: LISENSI PERANGKAT (DEVICE LOCK) */}
           {/* ========================================================== */}
           {activeMenu === 'LISENSI_PERANGKAT' && (adminSession?.role === 'Master' || adminSession?.role === 'SuperUser') && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 animate-fade-in text-left">
@@ -4038,8 +4823,147 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
               </div>
             </div>
           )}
+
+          {activeMenu === 'PENGATURAN_SISTEM' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 animate-fade-in">
+              <div className="flex items-center space-x-3 border-b border-divider pb-4">
+                <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600"><KeyRound className="h-6 w-6" /></div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-gray-850">Konfigurasi API Google</h3>
+                  <p className="text-xs text-body-text">Kelola API Key untuk sinkronisasi Google Maps. Nilai disimpan terenkripsi di database. Hanya Master & Direktur yang dapat mengakses halaman ini.</p>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 flex items-start gap-2">
+                <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                <span><strong>Info Keamanan:</strong> API Key asli tidak pernah ditampilkan di sini. Untuk mengganti, ketik nilai baru. Untuk membiarkan yang lama, kosongkan field.</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {apiSettings.map(setting => (
+                  <div key={setting.key} className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-600 uppercase tracking-wider flex items-center gap-2">
+                      {setting.label}
+                      {setting.isSet && (
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                          setting.source === 'database' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {setting.source === 'database' ? '✓ Tersimpan di DB' : 'Dari .env'}
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      type={setting.isSecret ? 'password' : 'text'}
+                      placeholder={setting.isSet ? `Nilai saat ini: ${setting.value}` : 'Belum di-set'}
+                      value={settingsForm[setting.key] || ''}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, [setting.key]: e.target.value })}
+                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono focus:ring-2 focus:ring-rose-500 focus:border-transparent"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-4 border-t border-divider flex justify-end">
+                <button
+                  onClick={handleSaveSettings}
+                  disabled={isSavingSettings}
+                  className="px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {isSavingSettings ? 'Menyimpan...' : 'Simpan Konfigurasi'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'AUDIT_LOG' && (
+            <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden animate-fade-in">
+              <div className="p-6 border-b border-divider flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50">
+                <div>
+                  <h3 className="font-display font-bold text-headings text-base flex items-center gap-2">
+                    <ShieldCheck className="h-5 w-5 text-rose-600" />
+                    Audit Log Sistem
+                  </h3>
+                  <p className="text-xs text-body-text mt-1">Rekam jejak seluruh aktivitas dan perubahan data di dalam sistem.</p>
+                </div>
+                <div className="relative w-full md:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input 
+                    type="text" 
+                    placeholder="Cari email, aksi, atau entitas..." 
+                    value={searchAudit}
+                    onChange={(e) => setSearchAudit(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-rose-500 outline-none bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-100 border-b border-gray-200 text-gray-600 uppercase font-mono">
+                    <tr>
+                      <th className="px-6 py-3">Waktu</th>
+                      <th className="px-6 py-3">Aktor (User)</th>
+                      <th className="px-6 py-3">Aksi</th>
+                      <th className="px-6 py-3">Target (Entity)</th>
+                      <th className="px-6 py-3">Detail</th>
+                      <th className="px-6 py-3">IP Address</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {auditLogs.map(log => {
+                      // Mencoba parse JSON details (jika ada)
+                      let parsedDetails = '';
+                      try {
+                        const json = JSON.parse(log.details);
+                        parsedDetails = Object.entries(json).map(([k, v]) => `${k}: ${v}`).join(' | ');
+                      } catch (e) {
+                        parsedDetails = log.details || '-';
+                      }
+
+                      // Pewarnaan berdasarkan aksi
+                      const actionColor = log.action.includes('DELETE') ? 'bg-rose-100 text-rose-700 border-rose-200' :
+                                          log.action.includes('LOGIN') ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                          log.action.includes('UPDATE') || log.action.includes('SAVE') ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                                          'bg-emerald-100 text-emerald-700 border-emerald-200';
+
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-3 font-mono text-gray-500 whitespace-nowrap">
+                            {new Date(log.createdAt).toLocaleString('id-ID', {
+                              day: '2-digit', month: 'short', year: 'numeric',
+                              hour: '2-digit', minute: '2-digit', second: '2-digit'
+                            })}
+                          </td>
+                          <td className="px-6 py-3 font-bold text-headings">{log.userEmail}</td>
+                          <td className="px-6 py-3">
+                            <span className={`px-2.5 py-1 border rounded-md font-bold text-[10px] uppercase ${actionColor}`}>
+                              {log.action.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="px-6 py-3 font-mono text-yasmin-green font-semibold">
+                            {log.entity} {log.entityId ? `(${log.entityId.substring(0, 8)}...)` : ''}
+                          </td>
+                          <td className="px-6 py-3 text-gray-600 max-w-xs truncate" title={parsedDetails}>
+                            {parsedDetails}
+                          </td>
+                          <td className="px-6 py-3 font-mono text-gray-400 text-[10px]">{log.ipAddress}</td>
+                        </tr>
+                      );
+                    })}
+                    {auditLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-10 text-center text-gray-400">
+                          Belum ada aktivitas yang tercatat.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           
-          {/* 7. MASTER KAMAR RAWAT INAP */}
+          {/* 14. MASTER KAMAR RAWAT INAP */}
           {activeMenu === 'KAMAR_RAWAT_INAP' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
               <div className="p-6 border-b border-divider flex flex-col md:flex-row md:items-center justify-between gap-4 bg-teal-50/40">
@@ -4167,7 +5091,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* 8. MASTER KAMAR ICU */}
+          {/* 15. MASTER KAMAR ICU */}
           {activeMenu === 'KAMAR_ICU' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
               <div className="p-6 border-b border-divider flex flex-col md:flex-row md:items-center justify-between gap-4 bg-indigo-50/40">
@@ -4295,7 +5219,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* 9. MASTER KAMAR IGD */}
+          {/* 16. MASTER KAMAR IGD */}
           {activeMenu === 'KAMAR_IGD' && (
             <div className="bg-white border border-divider rounded-2xl shadow-sm overflow-hidden">
               <div className="p-6 border-b border-divider flex flex-col md:flex-row md:items-center justify-between gap-4 bg-rose-50/40">
@@ -4423,7 +5347,7 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
             </div>
           )}
 
-          {/* KPI DASHBOARDS */}
+          {/* 17. KPI DASHBOARDS */}
           {activeMenu.startsWith('KPI_') && (
             <KpiDashboard menu={activeMenu} />
           )}
@@ -4634,12 +5558,10 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                         onChange={(e) => setCurrentDoctor({ ...currentDoctor, specialty: e.target.value })}
                         className="w-full px-4 py-2 border border-divider rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yasmin-green font-bold text-body-text bg-white"
                       >
-                        <option value="Kesehatan Keluarga">Kesehatan Keluarga</option>
-                        <option value="Spesialis Medis">Spesialis Medis</option>
-                        <option value="Bedah & Pemulihan">Bedah & Pemulihan</option>
-                        <option value="Gigi & Mulut">Gigi & Mulut</option>
-                        <option value="Kesehatan Mental">Kesehatan Mental</option>
-                        <option value="Penunjang Diagnostik">Penunjang Diagnostik</option>
+                        <option value="">-- Pilih Kategori --</option>
+                        {specialistCategories.map((cat) => (
+                          <option key={cat.id} value={cat.name}>{cat.name}</option>
+                        ))}
                       </select>
                     </div>
 
@@ -5079,6 +6001,16 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                     </select>
                   </div>
 
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-body-text uppercase tracking-wider">Biaya Pendaftaran (Rp)</label>
+                    <input 
+                      type="number" 
+                      value={currentPoly.price !== undefined ? currentPoly.price : 135000}
+                      onChange={(e) => setCurrentPoly({ ...currentPoly, price: Number(e.target.value) })}
+                      className="w-full px-4 py-2 border border-divider rounded-xl text-sm"
+                    />
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[11px] font-bold text-body-text uppercase tracking-wider block font-mono">Aktif Sejak Tanggal</label>
@@ -5171,6 +6103,26 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
                       <Check className="h-4 w-4" />
                       <span>Simpan Spesialis</span>
                     </button>
+                  </div>
+                </form>
+              )}
+
+              {activeMenu === 'MITRA_PENJAMIN' && (
+                <form onSubmit={handleSavePartner} className="space-y-4 text-left">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold uppercase">Nama Mitra / Perusahaan</label>
+                    <input type="text" required value={currentPartner.name || ''} onChange={e => setCurrentPartner({...currentPartner, name: e.target.value})} className="w-full px-4 py-2 border rounded-xl" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold uppercase">Kategori</label>
+                    <select value={currentPartner.type || 'Asuransi'} onChange={e => setCurrentPartner({...currentPartner, type: e.target.value})} className="w-full px-4 py-2 border rounded-xl bg-white cursor-pointer">
+                      <option value="Asuransi">Asuransi Swasta</option>
+                      <option value="Perusahaan">Perusahaan / Korporasi</option>
+                    </select>
+                  </div>
+                  <div className="pt-4 border-t flex justify-end space-x-2">
+                    <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded-xl font-bold">Batal</button>
+                    <button type="submit" className="px-5 py-2 bg-yasmin-green text-white rounded-xl font-bold">Simpan</button>
                   </div>
                 </form>
               )}
@@ -5427,6 +6379,132 @@ export default function AdminDashboard({ onClose, doctors, onUpdateDoctors, onSy
 
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DETAIL LAPORAN PASIEN */}
+      {selectedFeedback && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-fade-in">
+            <div className="p-6 border-b border-divider bg-slate-50 flex justify-between items-center">
+              <div>
+                <h3 className="font-display font-black text-lg text-headings">Detail Laporan Pasien</h3>
+                <p className="text-xs text-gray-500 mt-1">ID Pasien: <strong>{selectedFeedback.patientId}</strong></p>
+              </div>
+              <button onClick={() => setSelectedFeedback(null)} className="p-2 bg-white rounded-full hover:bg-gray-200 border border-gray-200">
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto space-y-5 text-sm">
+              <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-emerald-700 uppercase block mb-1">Kesan Umum Pasien:</span>
+                <span className="text-base font-black text-emerald-900">{selectedFeedback.kesan}</span>
+              </div>
+
+              <div className="space-y-3">
+                <span className="text-[10px] font-bold text-gray-500 uppercase">Rincian Pesan:</span>
+                {selectedFeedback.messages.map((msg: any, idx: number) => (
+                  <div key={idx} className="p-4 bg-slate-50 border border-gray-200 rounded-xl space-y-2">
+                    <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-headings text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">{msg.jenisPesan}</span>
+                        <span className="text-xs font-bold text-gray-700">Unit: {msg.unitLayanan}</span>
+                      </div>
+                      <div className="flex text-amber-500">
+                        {[...Array(msg.rating)].map((_, i) => <Star key={i} className="h-3.5 w-3.5 fill-current" />)}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-800 leading-relaxed font-medium">"{msg.isiPesan}"</p>
+                  </div>
+                ))}
+              </div>
+
+              {selectedFeedback.attachments?.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase">Lampiran Bukti:</span>
+                  <div className="flex flex-wrap gap-3">
+                    {selectedFeedback.attachments.map((file: any, idx: number) => (
+                      <div key={idx} className="border border-gray-200 rounded-xl p-2 bg-slate-50">
+                        {file.dataUrl ? (
+                          <img src={file.dataUrl} alt={file.name} className="h-24 w-auto rounded-lg object-cover cursor-pointer hover:opacity-80" onClick={() => setPreviewImage({ src: file.dataUrl, title: file.name })} />
+                        ) : (
+                          <div className="h-24 w-32 flex items-center justify-center text-xs text-gray-400 font-bold bg-white rounded-lg"><FileText className="h-6 w-6"/></div>
+                        )}
+                        <span className="block text-[9px] text-center mt-1 text-gray-500 truncate max-w-[120px]">{file.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-divider bg-slate-50 flex justify-end gap-2">
+              <button 
+                onClick={() => { handleUpdateFeedbackStatus(selectedFeedback.id, 'resolved'); setSelectedFeedback(null); }}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md transition-all"
+              >
+                Tandai Selesai (Resolved)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL FORM BANK */}
+      {isBankModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div className="p-5 border-b border-divider flex justify-between items-center bg-slate-50">
+              <h4 className="font-display font-bold text-headings">{currentBank.id ? 'Edit Data Bank' : 'Tambah Data Bank'}</h4>
+              <button onClick={() => setIsBankModalOpen(false)} className="p-1.5 hover:bg-gray-200 rounded-full cursor-pointer">
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveBank} className="p-6 space-y-4 text-left">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-600 uppercase">Nama Bank</label>
+                <input type="text" required value={currentBank.bankName} onChange={e => setCurrentBank({...currentBank, bankName: e.target.value})} className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-yasmin-green outline-none" placeholder="Contoh: Bank Mandiri" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-600 uppercase">Nomor Rekening</label>
+                <input type="text" required value={currentBank.accountNumber} onChange={e => setCurrentBank({...currentBank, accountNumber: e.target.value})} className="w-full p-3 border border-gray-300 rounded-xl font-mono focus:ring-2 focus:ring-yasmin-green outline-none" placeholder="1430030047508" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-600 uppercase">Atas Nama (Pemilik Rekening)</label>
+                <input type="text" required value={currentBank.accountHolder} onChange={e => setCurrentBank({...currentBank, accountHolder: e.target.value})} className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-yasmin-green outline-none" placeholder="PT Kharisma Husada" />
+              </div>
+              <div className="flex items-center space-x-2 pt-2">
+                <input type="checkbox" id="bankActive" checked={currentBank.isActive} onChange={e => setCurrentBank({...currentBank, isActive: e.target.checked})} className="w-4 h-4 rounded text-yasmin-green focus:ring-yasmin-green cursor-pointer" />
+                <label htmlFor="bankActive" className="text-xs font-bold text-gray-700 cursor-pointer select-none">Tampilkan di Halaman Pendaftaran Pasien</label>
+              </div>
+              <div className="pt-4 border-t border-gray-100 flex justify-end gap-2">
+                <button type="button" onClick={() => setIsBankModalOpen(false)} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold text-xs transition-colors cursor-pointer">Batal</button>
+                <button type="submit" className="px-5 py-2.5 bg-yasmin-green hover:bg-deep-teal text-white rounded-xl font-bold text-xs shadow-md transition-colors cursor-pointer">Simpan Data Bank</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div className="p-5 border-b border-divider flex justify-between items-center bg-slate-50">
+              <h4 className="font-display font-bold text-headings">{currentCategory.id ? 'Edit Kategori' : 'Tambah Kategori'}</h4>
+              <button onClick={() => setIsCategoryModalOpen(false)} className="p-1.5 hover:bg-gray-200 rounded-full cursor-pointer"><X className="h-5 w-5 text-gray-500" /></button>
+            </div>
+            <form onSubmit={handleSaveCategory} className="p-6 space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-600 uppercase">Nama Kategori Spesialis</label>
+                <input type="text" required value={currentCategory.name} onChange={e => setCurrentCategory({...currentCategory, name: e.target.value})} className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-yasmin-green outline-none" placeholder="Nama Kategori Spesialis" />
+              </div>
+              <div className="pt-4 border-t border-gray-100 flex justify-end gap-2">
+                <button type="button" onClick={() => setIsCategoryModalOpen(false)} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-xs">Batal</button>
+                <button type="submit" className="px-5 py-2.5 bg-yasmin-green text-white rounded-xl font-bold text-xs shadow-md">Simpan</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

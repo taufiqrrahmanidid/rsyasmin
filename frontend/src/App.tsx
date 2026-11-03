@@ -36,8 +36,8 @@ import { APP_TRANSLATIONS } from './translations';
 import { EXTRA_TRANSLATIONS } from './translations_extra';
 import AdminDashboard, { INITIAL_ANNOUNCEMENTS, INITIAL_ROOMS } from './components/AdminDashboard';
 import AdminPendaftaranModule from './components/AdminPendaftaran';
-import { doc, getDoc } from './lib/firebase';
-import { fetchCollection, syncCollectionToCloud, saveDocument, db } from './lib/firebase';
+import { doc, getDoc } from './lib/db';
+import { fetchCollection, saveDocument, db } from './lib/db';
 import { submitPendaftaran } from './lib/api';
 import PatientRegistrationWizard from './components/PatientRegistrationWizard';
 import PatientPortalDashboard from './components/PatientPortalDashboard';
@@ -405,8 +405,6 @@ export default function App() {
     ).map(d => d.id);
     localStorage.setItem('admin_deleted_doctors', JSON.stringify(deleted));
     
-    // Cloud sync
-    syncCollectionToCloud('doctors', newDoctors);
   };
 
   const handleSyncSystemDoctors = () => {
@@ -461,8 +459,6 @@ export default function App() {
     localStorage.setItem('admin_doctors_list', JSON.stringify(uniqueMerged));
     localStorage.removeItem('admin_deleted_doctors'); // Clear deleted log to allow full restore
     
-    // Cloud sync
-    syncCollectionToCloud('doctors', uniqueMerged);
     alert('✅ Sinkronisasi Berhasil: Seluruh foto dan data sistem dokter telah diperbarui ke versi terbaru!');
   };
 
@@ -482,8 +478,6 @@ export default function App() {
       localStorage.setItem('admin_doctors_list', JSON.stringify(uniqueData));
       localStorage.removeItem('admin_deleted_doctors');
       
-      // Cloud sync
-      syncCollectionToCloud('doctors', uniqueData);
       alert('♻️ Reset Berhasil: Data dokter telah dikembalikan ke bawaan sistem!');
     }
   };
@@ -663,7 +657,6 @@ export default function App() {
           localStorage.setItem('admin_announcements', JSON.stringify(healedAnns));
           if (hasChange) {
             console.log('Detected outdated image paths in cloud announcements list. Healing and updating cloud DB...');
-            await syncCollectionToCloud('announcements', healedAnns);
           }
         } else {
           throw new Error('No announcements in Firestore');
@@ -742,50 +735,28 @@ export default function App() {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // Load doctors from Firestore on mount, or seed if empty
+  // Load doctors dari backend. Jika DB kosong, pakai data lokal tanpa seeding otomatis.
   useEffect(() => {
-    const syncDoctors = async () => {
-      try {
-        const cloudDocs = await fetchCollection('doctors');
-        if (cloudDocs.length > 0) {
-          let hasChange = false;
-          const healedDocs = cloudDocs.map((doc: any) => {
-            const matched = DOCTORS_DATA.find(d => d.id === doc.id || d.name.toLowerCase().trim() === doc.name.toLowerCase().trim());
-            if (matched) {
-              if (doc.image !== matched.image) {
-                hasChange = true;
-                return { ...doc, image: matched.image };
+      const loadDoctors = async () => {
+          try {
+              const cloudDocs = await fetchCollection('doctors');
+              if (cloudDocs.length > 0) {
+                  setDoctorsList(cloudDocs);
+                  localStorage.setItem('admin_doctors_list', JSON.stringify(cloudDocs));
+              } else {
+                  // DB kosong — fallback ke data lokal. Tidak ada sync ke server.
+                  const localSaved = localStorage.getItem('admin_doctors_list');
+                  let listToUse = DOCTORS_DATA;
+                  if (localSaved) {
+                      try { listToUse = JSON.parse(localSaved); } catch (e) {}
+                  }
+                  setDoctorsList(listToUse);
               }
-            } else if (doc.image && (doc.image.includes('http') || doc.image.includes('run.app') || doc.image.includes('import.meta.url') || doc.image.startsWith('http'))) {
-              const assetsIndex = doc.image.indexOf('/assets/images/');
-              if (assetsIndex !== -1) {
-                hasChange = true;
-                return { ...doc, image: doc.image.substring(assetsIndex) };
-              }
-            }
-            return doc;
-          });
-          setDoctorsList(healedDocs);
-          localStorage.setItem('admin_doctors_list', JSON.stringify(healedDocs));
-          if (hasChange) {
-            console.log('Detected outdated image paths in cloud doctors list. Healing and updating cloud DB...');
-            await syncCollectionToCloud('doctors', healedDocs);
+          } catch (e) {
+              console.error('Error loading doctors:', e);
           }
-        } else {
-          // Firestore is empty, let's seed it with the current local list
-          const localSaved = localStorage.getItem('admin_doctors_list');
-          let listToSeed = DOCTORS_DATA;
-          if (localSaved) {
-            try { listToSeed = JSON.parse(localSaved); } catch (e) {}
-          }
-          await syncCollectionToCloud('doctors', listToSeed);
-        }
-      } catch (e) {
-        console.error('Error syncing doctors to/from Firestore:', e);
-      }
-    };
-    
-    syncDoctors();
+      };
+      loadDoctors();
   }, []);
 
   // Auto-sliding effect for Welcome Popup Slider (4 seconds cycle), resets whenever autoplayTrigger changes

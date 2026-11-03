@@ -25,13 +25,13 @@ export default function QueueStaffPanel() {
   const [adminEmail] = useState(localStorage.getItem('adminEmail') || 'admin@rsyasmin.id');
   const [loading, setLoading] = useState(false);
 
-  const API_BASE = import.meta.env.VITE_API_URL || 'https://api.yasminhospital.dinamixnet.id';
+  const API_BASE = import.meta.env.VITE_API_URL || '';
 
   // Fetch active queues
   useEffect(() => {
     const fetchQueues = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/queue/active?poli=${selectedPoli}`);
+        const res = await fetch(`${API_BASE}/api/queue/active?poli=${selectedPoli}`, { credentials: 'include' });
         const data = await res.json();
         
         if (data.success) {
@@ -58,6 +58,7 @@ export default function QueueStaffPanel() {
     try {
       const res = await fetch(`${API_BASE}/api/queue/call`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           queueId: nextQueue.id,
@@ -87,6 +88,7 @@ export default function QueueStaffPanel() {
     try {
       const res = await fetch(`${API_BASE}/api/queue/complete/${currentServing.id}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
@@ -112,6 +114,7 @@ export default function QueueStaffPanel() {
     try {
       const res = await fetch(`${API_BASE}/api/queue/skip/${currentServing.id}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });

@@ -1,6 +1,6 @@
 # RS Yasmin - Hospital Management System
 
-Platform manajemen Rumah Sakit Yasmin dengan arsitektur Node.js + React + MySQL.
+Platform manajemen Rumah Sakit Yasmin dengan arsitektur Node.js + React + PostgreSQL 16.
 
 ## Quick Start
 
@@ -22,13 +22,13 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 docker-compose up -d
 
 # Initialize database
-npm run --prefix backend prisma:migrate
+npm run --prefix backend db:push
 ```
 
 ### Environment Variables
 
 **Backend (.env)**
-- `DATABASE_URL`: MySQL connection string
+- `DATABASE_URL`: PostgreSQL connection string
 - `JWT_SECRET`: Secret key untuk signing JWT tokens
 - `NODE_ENV`: development / production
 - `PORT`: Server port (default: 8000)
@@ -57,7 +57,7 @@ nginx:80
 
 ## Docker Compose Services
 
-- **mysql**: Database
+- **postgres**: Database (PostgreSQL 16)
 - **backend**: API server
 - **frontend**: Web interface
 - **nginx**: Reverse proxy
@@ -73,7 +73,7 @@ nginx:80
 
 **Database connection error**
 ```bash
-docker-compose exec mysql mysql -u root -proot123
+docker-compose exec postgres psql -U yasmin -d yasmin
 ```
 
 **Clear containers**

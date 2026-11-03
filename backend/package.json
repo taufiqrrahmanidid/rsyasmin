@@ -16,19 +16,26 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^7.1.5",
     "express-validator": "^7.0.0",
+    "googleapis": "^188.0.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.3",
-    "socket.io": "^4.8.3"
+    "node-cron": "^4.6.0",
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "jest": "^30.5.2",
     "prisma": "^6.19.3",
     "supertest": "^7.3.0"
+  },
+  "engines": {
+    "node": ">=22.23.4"
   }
 }

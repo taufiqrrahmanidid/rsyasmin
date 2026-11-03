@@ -103,7 +103,7 @@ Nomor Antri : *( ${noAntrian} )*
 👉 *${kodeBooking}*
 
 Silakan buka Barcode Check-In Anda melalui Portal Pasien:
-🔗 https://yasminhospital.dinamixnet.id/pasien
+🔗 ${window.location.origin}/pasien
 
 _Mohon hadir 30 menit sebelum jam praktek untuk konfirmasi check-in di loket / mesin antrean mandiri RS Yasmin._`;
 
@@ -282,7 +282,21 @@ _Mohon hadir 30 menit sebelum jam praktek untuk konfirmasi check-in di loket / m
           <Row label="Nomor WhatsApp" value={item.phone} mono />
           <Row label="Kategori Jaminan" value={item.patientType} />
           {item.nik && <Row label="NIK e-KTP" value={item.nik} mono />}
+          
           <Row label="Metode Bayar" value={(item as any).metodePembayaran === 'bayar_di_loket' ? 'Loket RS' : 'Transfer Bank'} />
+          
+          {/* TAMBAHKAN BLOK INI */}
+          <div className="flex justify-between gap-4 border-b border-gray-50 pb-1.5 last:border-b-0 last:pb-0 items-center">
+            <span className="text-gray-400 font-medium">Nominal Tagihan</span>
+            <span className="text-right font-black text-emerald-700 text-sm font-mono bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+              Rp {((item as any).nominalBiaya || 135000).toLocaleString('id-ID')}
+            </span>
+          </div>
+          {(item as any).metodePembayaran === 'transfer' && (
+            <Row label="Bank Tujuan" value={(item as any).bankTujuan || 'Bank Transfer'} />
+          )}
+          {/* ============================== */}
+
           <Row label="Dokter Tujuan" value={item.selectedDoctorId} />
           <Row label="Jadwal Kunjungan" value={`${item.selectedDate} (${item.selectedTimeSlot})`} />
           {item.complaint && <Row label="Keluhan Medis" value={item.complaint} />}

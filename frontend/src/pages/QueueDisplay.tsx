@@ -19,7 +19,7 @@ export default function QueueDisplay() {
   const [allQueues, setAllQueues] = useState<Queue[]>([]);
   const [hospitalInfo, setHospitalInfo] = useState<any>(null);
 
-  const API_BASE = import.meta.env.VITE_API_URL || 'https://api.yasminhospital.dinamixnet.id';
+  const API_BASE = import.meta.env.VITE_API_URL || '';
 
   // Connect to SSE for real-time updates
   useEffect(() => {

@@ -1,25 +1,31 @@
+// backend/middlewares/cors.js
 const cors = require('cors');
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:8080',
-  'https://yasminhospital.dinamixnet.id',
-  'https://www.yasminhospital.dinamixnet.id',
-  'https://api.yasminhospital.dinamixnet.id'
-];
+// Whitelist dari env — comma-separated. WAJIB di-set.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 
-const corsMiddleware = cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+if (ALLOWED_ORIGINS.length === 0) {
+    console.error('[CORS] FATAL: ALLOWED_ORIGINS kosong. Semua request dengan Origin akan ditolak.');
+}
+
+console.log('[CORS] Whitelist:', ALLOWED_ORIGINS.join(', ') || '(kosong)');
+
+module.exports = cors({
+    origin: (origin, callback) => {
+        // Request tanpa Origin (curl, server-to-server, health check) → izinkan
+        if (!origin) return callback(null, true);
+
+        if (ALLOWED_ORIGINS.includes(origin)) {
+            return callback(null, true);
+        }
+
+        console.warn(`[CORS] Ditolak: Origin="${origin}". Whitelist: ${ALLOWED_ORIGINS.join(', ')}`);
+        callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 });
-
-module.exports = corsMiddleware;

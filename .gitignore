@@ -42,6 +42,14 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+*.sql
+*.dump
+*.sql.gz
+
+# Arsip
+*.zip
+*.tar
+*.tar.gz
 
 # Cache
 .cache/

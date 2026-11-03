@@ -21,6 +21,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import BarcodeCard from './BarcodeCard';
+import { io } from 'socket.io-client';
 
 interface Props {
   onExit: () => void;
@@ -49,15 +50,21 @@ export default function PatientPortalDashboard({ onExit }: Props) {
   const API_BASE = import.meta.env.VITE_BACKEND_URL;
 
   // [KUNCI PERBAIKAN 1]: Gunakan noIdentitas untuk memfilter data
-  const loadPatientBookings = useCallback(async (identifier: string) => {
+  const loadPatientBookings = useCallback(async () => {
+    const token = sessionStorage.getItem('yasmin_patient_token');
+    if (!token) return; // Belum login
     setRefreshing(true);
     try {
-      const res = await fetch(`${API_BASE}/api/pendaftaran`);
+      const res = await fetch(`${API_BASE}/api/patient/bookings`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      // Cek apakah server membalas dengan sukses (200 OK)
       if (res.ok) {
-        const all = await res.json();
-        // Saring data murni berdasarkan noIdentitas (yang berisi NIK atau RM)
-        const myBookings = all.filter((b: any) => b.noIdentitas === identifier);
+        const myBookings = await res.json();
         setBookings(myBookings);
+      } else {
+        console.warn('Gagal memuat dari API, tetap gunakan data dari sesi login.');
       }
     } catch (e) {
       console.error(e);
@@ -68,23 +75,36 @@ export default function PatientPortalDashboard({ onExit }: Props) {
 
   useEffect(() => {
     if (patientSession?.nik) {
-      loadPatientBookings(patientSession.nik);
+      loadPatientBookings();
     }
   }, [patientSession, loadPatientBookings]);
 
-  // Real-Time Socket.io
+    // Real-Time Socket.io
   useEffect(() => {
     let socket: any;
+    let isMounted = true;
+
     if (patientSession?.nik) {
-      import('socket.io-client').then(({ io }) => {
-        socket = io(API_BASE);
-        socket.on('DASHBOARD_UPDATED', () => {
-          loadPatientBookings(patientSession.nik);
-        });
+      // Panggil io secara langsung, bukan lewat dynamic import
+      socket = io(import.meta.env.VITE_BACKEND_URL, {
+        transports: ['websocket', 'polling'],
+        forceNew: true // Mencegah bentrok koneksi saat React Strict Mode
+      });
+
+      socket.on('DASHBOARD_UPDATED', () => {
+        if (isMounted) {
+          loadPatientBookings();
+        }
       });
     }
-    return () => { if (socket) socket.disconnect(); };
-  }, [patientSession?.nik, API_BASE, loadPatientBookings]);
+
+    return () => { 
+      isMounted = false;
+      if (socket) {
+        socket.disconnect(); 
+      }
+    };
+  }, [patientSession?.nik, loadPatientBookings]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,6 +125,7 @@ export default function PatientPortalDashboard({ onExit }: Props) {
       if (!res.ok) throw new Error(data.error || 'Login gagal.');
 
       localStorage.setItem('yasmin_patient_account', JSON.stringify(data.patient));
+      if (data.token) sessionStorage.setItem('yasmin_patient_token', data.token);
       setPatientSession(data.patient);
       setBookings(data.bookings || []);
     } catch (err: any) {
@@ -116,6 +137,7 @@ export default function PatientPortalDashboard({ onExit }: Props) {
 
   const handleLogout = () => {
     localStorage.removeItem('yasmin_patient_account');
+    sessionStorage.removeItem('yasmin_patient_token');
     setPatientSession(null);
     setBookings([]);
   };

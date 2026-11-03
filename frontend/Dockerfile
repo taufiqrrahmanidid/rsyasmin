@@ -1,21 +1,18 @@
-FROM node:20-alpine
-
+FROM node:22.23.4-alpine AS builder
 WORKDIR /app
 
-RUN apk add --no-cache dumb-init
+ARG VITE_BACKEND_URL=""
+ARG VITE_GOOGLE_MAPS_API_KEY=""
+ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
+ENV VITE_GOOGLE_MAPS_API_KEY=${VITE_GOOGLE_MAPS_API_KEY}
 
 COPY package*.json ./
-RUN npm ci && npm cache clean --force
-
+RUN npm ci --ignore-scripts
 COPY . .
+RUN npm run build
 
-EXPOSE 5173
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:5173/ || exit 1
-
-RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
-USER nodejs
-
-ENTRYPOINT ["/usr/sbin/dumb-init", "--"]
-CMD ["npm", "run", "dev", "--", "--host"]
+FROM nginx:1.27-alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
